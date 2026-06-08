@@ -57,15 +57,10 @@ _fig5_filtered_
 
 **Ours — run0009:**
 
-| &nbsp; | &nbsp; |
-|:---:|:---:|
-| ![](paper_figures/ours/filtered_s2_vis_00.png) | ![](paper_figures/ours/filtered_s2_vis_01.png) |
-| _Filtered scene 00_ | _Filtered scene 01_ |
-
-| &nbsp; | &nbsp; |
-|:---:|:---:|
-| ![](paper_figures/ours/filtered_s2_vis_02.png) | &nbsp; |
-| _Filtered scene 02_ | &nbsp; |
+| &nbsp; | &nbsp; | &nbsp; |
+|:---:|:---:|:---:|
+| ![](paper_figures/ours/filtered_s2_vis_00.png) | ![](paper_figures/ours/filtered_s2_vis_01.png) | ![](paper_figures/ours/filtered_s2_vis_02.png) |
+| _Filtered scene 00_ | _Filtered scene 01_ | _Filtered scene 02_ |
 
 Our `bin/filter_image.py` is a byte-faithful port of the paper's `only_shadow_cloud_removal()` (dilate → medianBlur(155) → absdiff → Otsu → min-max norm → truncated threshold). The paper shows raw vs filtered scenes; we show only the filtered outputs (raw scenes live in the run input dir, not the output dir).
 

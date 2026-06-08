@@ -337,16 +337,15 @@ def render_report(
             A("")
             A("**Ours — run0009:**")
             A("")
-            for k in range(0, len(ours_paths), 2):
-                pair = ours_paths[k:k+2]
-                while len(pair) < 2:
-                    pair.append(("", None))
-                A("| " + " | ".join("&nbsp;" for _ in pair) + " |")
-                A("|" + "|".join(":---:" for _ in pair) + "|")
-                A("| " + " | ".join(img_md(p, repo_root) for _, p in pair) + " |")
-                A("| " + " | ".join(f"_{lbl}_" if lbl else "&nbsp;"
-                                     for lbl, _ in pair) + " |")
-                A("")
+            # Lay all ours images on a single row so they can be compared at a
+            # glance (matches the paper's multi-panel figures).
+            cols = len(ours_paths)
+            A("| " + " | ".join("&nbsp;" for _ in ours_paths) + " |")
+            A("|" + "|".join(":---:" for _ in ours_paths) + "|")
+            A("| " + " | ".join(img_md(p, repo_root) for _, p in ours_paths) + " |")
+            A("| " + " | ".join(f"_{lbl}_" if lbl else "&nbsp;"
+                                 for lbl, _ in ours_paths) + " |")
+            A("")
         if sec.commentary:
             A(sec.commentary)
         A("")
