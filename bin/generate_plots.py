@@ -53,7 +53,7 @@ def f1_m(y_true, y_pred):
 
 # ── Plot functions ───────────────────────────────────────────────────
 
-def plot_training_curves(history, output_dir, dpi=150):
+def plot_training_curves(history, output_dir, dpi=150, prefix=""):
     """2x2 subplot grid: loss, accuracy, F1, precision/recall vs epoch."""
     fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
@@ -109,13 +109,13 @@ def plot_training_curves(history, output_dir, dpi=150):
     fig.suptitle("Training Curves", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.96])
 
-    out_path = os.path.join(output_dir, "training_curves.png")
+    out_path = os.path.join(output_dir, prefix + "training_curves.png")
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"Saved {out_path}")
 
 
-def plot_confusion_matrix(y_true, y_pred, class_names, output_dir, dpi=150, labels=None):
+def plot_confusion_matrix(y_true, y_pred, class_names, output_dir, dpi=150, labels=None, prefix=""):
     """Normalized confusion matrix matching paper Fig 13."""
     from sklearn.metrics import confusion_matrix as sk_confusion_matrix
 
@@ -149,13 +149,13 @@ def plot_confusion_matrix(y_true, y_pred, class_names, output_dir, dpi=150, labe
             )
 
     fig.tight_layout()
-    out_path = os.path.join(output_dir, "confusion_matrix.png")
+    out_path = os.path.join(output_dir, prefix + "confusion_matrix.png")
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"Saved {out_path}")
 
 
-def plot_prediction_samples(X_test, y_true, y_pred, class_names, n, output_dir, dpi=150):
+def plot_prediction_samples(X_test, y_true, y_pred, class_names, n, output_dir, dpi=150, prefix=""):
     """Grid of N samples: input image | ground truth mask | predicted mask."""
     n_classes = len(class_names)
     n = min(n, len(X_test))
@@ -192,13 +192,13 @@ def plot_prediction_samples(X_test, y_true, y_pred, class_names, n, output_dir, 
     fig.suptitle("Sample Predictions", fontsize=14, fontweight="bold")
     fig.tight_layout(rect=[0, 0, 1, 0.97])
 
-    out_path = os.path.join(output_dir, "prediction_samples.png")
+    out_path = os.path.join(output_dir, prefix + "prediction_samples.png")
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"Saved {out_path}")
 
 
-def plot_metrics_table(eval_results, per_class, class_names, output_dir, dpi=150):
+def plot_metrics_table(eval_results, per_class, class_names, output_dir, dpi=150, prefix=""):
     """Render Table IV as a matplotlib table image and save per-class JSON."""
     # Build table data
     headers = ["Class", "Precision", "Recall", "F1-Score", "Support"]
@@ -240,13 +240,13 @@ def plot_metrics_table(eval_results, per_class, class_names, output_dir, dpi=150
         table[0, j].set_facecolor("#4472C4")
         table[0, j].set_text_props(color="white", fontweight="bold")
 
-    out_path = os.path.join(output_dir, "metrics_table.png")
+    out_path = os.path.join(output_dir, prefix + "metrics_table.png")
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"Saved {out_path}")
 
     # Save per-class JSON
-    json_path = os.path.join(output_dir, "per_class_metrics.json")
+    json_path = os.path.join(output_dir, prefix + "per_class_metrics.json")
     with open(json_path, "w") as f:
         json.dump(per_class, f, indent=2)
     logger.info(f"Saved {json_path}")
@@ -278,6 +278,10 @@ def main():
                         help="Plot resolution (default: 150)")
     parser.add_argument("--class-names", type=str, default="Ice,Thin Ice,Water",
                         help="Comma-separated class names (default: 'Ice,Thin Ice,Water')")
+    parser.add_argument("--prefix", type=str, default="",
+                        help="Prefix prepended to every output filename "
+                             "(e.g. 'orig_' / 'filtered_') to disambiguate "
+                             "multiple branches writing to the same directory")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
@@ -287,7 +291,7 @@ def main():
     logger.info("Loading training history...")
     with open(args.training_history) as f:
         history = json.load(f)
-    plot_training_curves(history, args.output_dir, dpi=args.dpi)
+    plot_training_curves(history, args.output_dir, dpi=args.dpi, prefix=args.prefix)
 
     # ── 2. Load model and test data for predictions ──
     logger.info("Loading model and test data...")
@@ -340,13 +344,13 @@ def main():
     logger.info("Generating confusion matrix...")
     plot_confusion_matrix(y_true_flat, y_pred_flat, class_names,
                           output_dir=args.output_dir, dpi=args.dpi,
-                          labels=labels)
+                          labels=labels, prefix=args.prefix)
 
     # ── 4. Prediction samples ──
     logger.info("Generating prediction samples...")
     plot_prediction_samples(X_test, y_true_spatial, y_pred_spatial,
                             class_names, args.num_samples,
-                            args.output_dir, dpi=args.dpi)
+                            args.output_dir, dpi=args.dpi, prefix=args.prefix)
 
     # ── 5. Per-class metrics and table ──
     logger.info("Computing per-class metrics...")
@@ -371,7 +375,7 @@ def main():
     }
 
     plot_metrics_table(eval_results, per_class, class_names,
-                       args.output_dir, dpi=args.dpi)
+                       args.output_dir, dpi=args.dpi, prefix=args.prefix)
 
     logger.info("All plots generated successfully.")
 

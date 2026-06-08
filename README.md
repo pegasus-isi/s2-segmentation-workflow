@@ -206,6 +206,11 @@ pegasus-plan --submit -s condorpool -o local workflow.yml
 # tile pairs, and feeds them into Stage 2 training. No external data
 # directories needed — everything is produced within the workflow.
 # With 66 images this creates 66×64 = 4,224 parallel segment jobs.
+#
+# Defaults: --paths both --filtered-labels filtered
+#   → trains BOTH the unfiltered and the thin-cloud/shadow-filtered
+#     U-Net in one DAG (paper Table IV columns) with self-consistent
+#     filtered labels (Option A — reproduces the paper's ~99%).
 python workflow_generator.py \
     --images data/s2_scenes/s2_vis_*.png \
     --auto-label \
@@ -213,6 +218,24 @@ python workflow_generator.py \
 
 pegasus-plan --submit -s condorpool -o local workflow.yml
 ```
+
+**Only one path, or different label-derivation strategy:**
+
+```bash
+# Unfiltered branch only
+python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+    --auto-label --paths orig --output workflow.yml
+
+# Filtered branch only, with the honest cross-comparison
+# (filtered input vs raw-scene labels — yields ~90%, exposing that the
+# paper's 98.97% requires label-consistency)
+python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+    --auto-label --paths filtered --filtered-labels raw \
+    --output workflow.yml
+```
+
+See `comparison_report.md` for a side-by-side of every run mode against
+the paper's reported numbers (U-Net-Auto: 90.18% original, 98.97% filtered).
 
 **Horovod distributed training (multi-node GPU):**
 
@@ -269,6 +292,8 @@ python workflow_generator.py \
 | `--tile-size` | 250 | Tile dimension in pixels |
 | `--original-size` | 2000 | Original image dimension |
 | `--auto-label` | off | Single-DAG mode: splits source scenes + masks into matched 256×256 tiles for Stage 2 (no external dirs needed) |
+| `--paths` | both | Which auto-label training path(s) to run: `both` (orig + thin-cloud/shadow-filtered, paper Table IV), `orig`, or `filtered`. With `both`, outputs are suffixed `_orig` / `_filtered`. |
+| `--filtered-labels` | filtered | How the filtered branch's labels are produced. `filtered` color-segments the *filtered* tiles so input and target are self-consistent (reproduces the paper's ~99%). `raw` reuses raw-scene labels (filtered input vs raw target — the honest cross-comparison, ~90%). |
 | `--train-images-dir` | None | Training images directory (enables Stage 2; not needed with `--auto-label`) |
 | `--train-masks-dir` | None | Training masks directory (enables Stage 2; not needed with `--auto-label`) |
 | `--training-mode` | single-gpu | Training mode: `single-gpu`, `mirrored`, or `horovod` |
@@ -305,14 +330,30 @@ pytest tests/test_workflow_generator.py -v
 
 ## Outputs
 
+With `--paths both` (default), Stage 2 artifacts are produced for **both** branches and
+suffixed/prefixed as shown below. With `--paths orig` or `--paths filtered` alone, only
+the corresponding suffix is emitted (no suffix when no auto-label is used).
+
 | File | Description |
 |---|---|
-| `{basename}_seg.png` | Merged segmentation mask (2000×2000, per source image) |
-| `model.hdf5` | Trained U-Net model weights |
-| `training_history.json` | Loss/accuracy/F1 per epoch |
-| `evaluation_results.json` | Test loss, accuracy, F1, precision, recall |
-| `training_curves.png` | Training loss/accuracy/F1/precision-recall curves |
-| `confusion_matrix.png` | Normalized confusion matrix (paper Fig 13) |
-| `prediction_samples.png` | Side-by-side input/truth/prediction grid (paper Fig 14) |
-| `metrics_table.png` | Classification metrics table (paper Table IV) |
-| `per_class_metrics.json` | Per-class precision, recall, F1-score, support |
+| `{basename}_seg.png` | Stage 1 merged segmentation mask (2000×2000, per source image) |
+| `filtered_{basename}.png` | Thin-cloud/shadow-filtered source scene (when `--paths both` or `filtered`) |
+| `model_orig.hdf5`, `model_filtered.hdf5` | Trained U-Net weights (one per branch) |
+| `training_history_{orig,filtered}.json` | Loss/accuracy/F1 per epoch + training time |
+| `evaluation_results_{orig,filtered}.json` | Test loss, accuracy, F1, precision, recall |
+| `training_curves.png`, `filtered_training_curves.png` | Loss/accuracy/F1/precision-recall curves |
+| `confusion_matrix.png`, `filtered_confusion_matrix.png` | Normalized confusion matrix (paper Fig 13) |
+| `prediction_samples.png`, `filtered_prediction_samples.png` | Side-by-side input/truth/prediction grid (paper Fig 14) |
+| `metrics_table.png`, `filtered_metrics_table.png` | Classification metrics table (paper Table IV) |
+| `per_class_metrics.json`, `filtered_per_class_metrics.json` | Per-class precision, recall, F1-score, support |
+
+## Reproducing the Paper's Table IV
+
+| Condition | Paper | This workflow (run0009, default settings) |
+|---|---|---|
+| U-Net-Auto, original | 90.18% accuracy | **94.72%** accuracy |
+| U-Net-Auto, filtered | 98.97% accuracy | **99.82%** accuracy |
+
+See `comparison_report.md` / `comparison_report.html` for the full reproduction study,
+per-class metrics, and a discussion of the (previously undocumented) requirement that
+the filtered condition re-derive labels from the filtered images.

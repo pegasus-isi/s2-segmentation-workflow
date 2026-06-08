@@ -126,7 +126,37 @@ s2-segmentation-workflow/
 
 > **Tile count matching**: Both `split_images` and `split_masks` use `--pad` to zero-pad edge tiles to full 256×256 when the image dimension (2000) is not evenly divisible by 256. This guarantees both produce exactly `ceil(2000/256)^2 = 64` tiles per scene, so image and mask counts always match for `preprocess_data`.
 
+#### Job 3d — `filter_image` (auto-label mode, filtered path)
+
+- **Source**: `bin/filter_image.py` — direct port of `only_shadow_cloud_removal()` from the
+  paper's reference notebooks (dilate → medianBlur(155) → absdiff → Otsu → bitwise → min-max
+  normalize → truncated threshold).
+- **When**: Present when `--paths` is `both` or `filtered`.
+- **Input**: One source scene PNG (same input as `split_images`).
+- **Output**: One thin-cloud/shadow-filtered grayscale PNG, named `filtered_{basename}.png`.
+- **Parallelism**: One job per source image, all run concurrently. Runs in parallel with
+  Stage 1.
+- **HTCondor profile**: CPU-only, ~1 GB RAM (`medianBlur(155)` on a 2048² scene).
+- **Parameters**: `--input <source_scene.png>`, `--output <filtered.png>`.
+- **Dependencies**: None.
+
+The filtered scene then feeds a *second* `split_images` job (producing
+`train_imgf_{basename}_*.png`) and, in the default Option A configuration
+(`--filtered-labels filtered`), a *second* `color_segment` → `image_merge` → `split_masks`
+chain that re-derives labels from the filtered tiles. With `--filtered-labels raw` the
+filtered branch instead reuses the orig-branch mask tiles, giving filtered input vs raw
+labels (the honest cross-comparison that exposes ~90% accuracy and motivates the paper's
+~99% headline).
+
 ### Stage 2: U-Net Model Training
+
+When `--paths both` is in effect (default), Stage 2 is **instantiated twice** — once on the
+raw image/raw label branch (suffix `_orig`) and once on the filtered image / filtered-or-raw
+label branch (suffix `_filtered`). Both branches share the same train/test split
+(`random_state=0` and identical file ordering), so the comparison is apples-to-apples.
+Job IDs and output filenames are suffixed accordingly (e.g. `train_orig`, `train_filtered`,
+`model_orig.hdf5`, `model_filtered.hdf5`, `evaluation_results_{orig,filtered}.json`, and
+`{orig prefix=none, filtered}_{training_curves,confusion_matrix,...}.png`).
 
 #### Job 4 — `preprocess_data`
 
@@ -416,6 +446,8 @@ condor.+WantGPU = true
 | `epochs` | 50 | Training epochs |
 | `batch_size` | 32 | Training batch size |
 | `random_state` | 0 | Random seed for reproducibility |
+| `--paths` | both | Auto-label training paths: `both` (paper Table IV), `orig`, or `filtered` |
+| `--filtered-labels` | filtered | Filtered branch's label source: `filtered` (self-consistent, paper ~99%) or `raw` (filtered input vs raw labels, ~90%) |
 
 ## 12. Refactoring Notes
 
