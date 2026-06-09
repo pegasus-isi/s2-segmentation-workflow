@@ -17,25 +17,24 @@ are not listed here in detail — they are summarised in §4.
 
 These gaps block full reproducibility of the paper's claims.
 
-### 1.1 No inference pipeline (paper Fig 9)
+### 1.1 No inference pipeline (paper Fig 9) — ✅ resolved
 
 - **Paper:** Fig 9 (page 1021) describes the production path: original scene →
   split into 256×256 tiles → thin-cloud/shadow filter → U-Net model → merge
   predictions into a per-scene sea-ice classification map.
 - **Reference code:** `s2_u_net_tf.py` lines 303–312 only evaluates on the
   held-out test set; no standalone inference script.
-- **Our workflow:** `generate_plots.py` predicts on the test set only. There
-  is no job that consumes a fresh scene and emits a predicted segmentation
-  mask end-to-end.
-- **Effort to add:** **Medium.** New `bin/infer_unet.py` that:
-  1. takes a 2000×2000 scene PNG (and optionally the trained model),
-  2. optionally applies `filter_image` first,
-  3. tiles into 256×256 patches,
-  4. runs model.predict on each patch,
-  5. merges the predicted tiles into a single output mask.
-
-  Plus a `Job("infer_unet", …)` in `workflow_generator.py` so production
-  scenes can be classified by re-submitting the DAG.
+- **Implemented in:** `bin/infer_unet.py` + `--infer` / `--infer-images`
+  flags in `workflow_generator.py`. The script loads a trained model,
+  optionally re-applies `only_shadow_cloud_removal` (matching the trained
+  branch), tiles the scene into 256² patches, runs `model.predict`,
+  recolours predictions using the metadata's class→colour mapping, and
+  merges back into a full RGB segmentation PNG. With `--paths both
+  --infer`, one inference job is emitted per (branch, scene) pair —
+  filtered-branch jobs carry `--filter`, orig-branch jobs do not.
+- **Smoke-tested** on pegasus2 with the run0009 `model_filtered.hdf5` over
+  `s2_vis_00.png`: 2.9 s for 64 tiles end-to-end; output predictions match
+  the qualitative style of paper Fig 14.
 
 ### 1.2 No cloud-coverage stratified validation (paper Table V, Fig 13)
 
@@ -161,13 +160,10 @@ These were checked line-by-line against the reference; **no gap**:
 
 ## 5. Recommended next step
 
-Add **§1.1 (inference pipeline)** first — it's the only gap that prevents using the
-trained model end-to-end on new scenes. Everything else either has a documented
-workaround (Spark vs HTCondor), is a numeric stratification we can layer on later
-(§1.2), or is a reporting nicety (§3).
-
-After §1.1, §1.2 (cloud-coverage stratification) is the next-highest-value addition
-because it unlocks Table V and the per-stratum panels of Fig 13.
+§1.1 is now closed (`bin/infer_unet.py` + `--infer` flag). The next-highest-value
+addition is **§1.2 (cloud-coverage stratification)** because it unlocks Table V and
+the per-stratum panels of Fig 13. After that, §2.1 (SSIM) is small and would add a
+new headline number for the auto-labeling quality claim.
 
 ---
 

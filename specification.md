@@ -241,6 +241,22 @@ Job IDs and output filenames are suffixed accordingly (e.g. `train_orig`, `train
 - **HTCondor profile**: GPU node (requires TF/Keras to load model and run predictions), 4 GB RAM, 2 cores.
 - **Dependencies**: `evaluate_model` (consumes eval_file), `train_unet` (consumes model_file, history_file), `preprocess_data` (consumes test data arrays, metadata)
 
+#### Job 8 — `infer_unet` (optional, paper Fig 9)
+
+- **Source**: `bin/infer_unet.py`.
+- **When**: Emitted only when `--infer` is passed to `workflow_generator.py`. One inference job per `(branch, scene)` pair — i.e. when `--paths both --infer` is in effect, the DAG contains `2 × N` inference jobs (N = number of `--infer-images`, defaulting to `--images`).
+- **Input**: Trained `model{_branch}.hdf5`, a full Sentinel-2 scene PNG, the branch's `preprocess_metadata{_branch}.json`, and `model.py`.
+- **Output**: Colour-coded prediction PNG `{branch_prefix}infer_{scene_basename}.png` at the original scene resolution (red = thick ice, blue = thin ice, green = open water).
+- **Parameters**:
+  - `--model <path>`, `--input <scene.png>`, `--output <prediction.png>`
+  - `--tile-size 256` (must match training tile size)
+  - `--metadata <preprocess_metadata.json>` (recovers the exact class→colour mapping from the encoder's grayscale-class table)
+  - `--filter` (added by the filtered branch only — re-runs `only_shadow_cloud_removal` on each inference scene so the model sees the same input distribution it was trained on)
+  - `--batch-size 32`, `--class-colors "R,G,B"` (optional overrides)
+- **Logic**: tile → optional filter → L2-normalize (same `normalize(axis=1)` used in training) → `model.predict` → argmax → recolour via metadata → reassemble → write RGB PNG. Edge tiles are zero-padded to the full `tile_size` and the predicted canvas is cropped back to the original scene dimensions before saving.
+- **HTCondor profile**: GPU node, 8 GB RAM, 2 cores.
+- **Dependencies**: `train_unet` (model), `preprocess_data` (metadata), and the source-scene replica in the Replica Catalog.
+
 ## 5. DAG Structure
 
 ```

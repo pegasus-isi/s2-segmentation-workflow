@@ -53,6 +53,7 @@ TOOL_CONFIGS = {
     "train_unet":      {"memory": "14 GB",   "cores": 4, "gpus": 1},
     "evaluate_model":  {"memory": "4 GB",   "cores": 2, "gpus": 1},
     "generate_plots":  {"memory": "14 GB",  "cores": 2, "gpus": 1},
+    "infer_unet":      {"memory": "8 GB",   "cores": 2, "gpus": 1},
 }
 
 
@@ -159,11 +160,12 @@ class S2SegmentationWorkflow:
             )
             self.tc.add_transformations(tx)
 
-        # GPU-bound transformations (train + evaluate)
+        # GPU-bound transformations (train + evaluate + infer)
         # Registered on both exec and GPU sites so pegasus-plan can resolve
         # the PFN regardless of which site is passed via -s. HTCondor uses
         # request_gpus for placement on GPU-equipped nodes.
-        gpu_tools = ["train_unet", "evaluate_model", "generate_plots"]
+        gpu_tools = ["train_unet", "evaluate_model", "generate_plots",
+                     "infer_unet"]
         for tool_name in gpu_tools:
             config = TOOL_CONFIGS[tool_name]
             pfn = os.path.join(self.wf_dir, f"bin/{tool_name}.py")
@@ -200,13 +202,22 @@ class S2SegmentationWorkflow:
     def create_replica_catalog(self, args):
         self.rc = ReplicaCatalog()
 
-        # Register source images
-        for img_path in args.images:
+        # Register source images (and any inference-only scenes not in the
+        # training corpus, so --infer can run on fresh data).
+        registered = set()
+        all_scenes = list(args.images)
+        if getattr(args, "infer", False) and args.infer_images:
+            all_scenes += list(args.infer_images)
+        for img_path in all_scenes:
+            lfn = os.path.basename(img_path)
+            if lfn in registered:
+                continue
             self.rc.add_replica(
                 "local",
-                os.path.basename(img_path),
+                lfn,
                 "file://" + os.path.abspath(img_path),
             )
+            registered.add(lfn)
 
         # Register model.py as a support file (used by train + evaluate)
         model_py = os.path.join(self.wf_dir, "bin/model.py")
@@ -597,6 +608,40 @@ class S2SegmentationWorkflow:
         )
         self.wf.add_jobs(plots_job)
 
+        # --- Job: infer_unet (paper Fig 9) ---
+        # Apply the freshly trained model to whole scenes end-to-end.
+        # In the "filtered" branch we re-run the same only_shadow_cloud_removal
+        # filter on each inference scene so the model sees the same input
+        # distribution it was trained on. The orig branch skips --filter.
+        if args.infer:
+            infer_filter = (label == "filtered")
+            for img_path in args.infer_images:
+                scene_basename = os.path.splitext(os.path.basename(img_path))[0]
+                input_file = File(os.path.basename(img_path))
+                out_file = File(f"{prefix}infer_{scene_basename}.png")
+
+                infer_args = [
+                    "--model", model_file,
+                    "--input", input_file,
+                    "--output", out_file,
+                    "--tile-size", "256",  # must match training tile size
+                    "--metadata", metadata_file,
+                ]
+                if infer_filter:
+                    infer_args.append("--filter")
+
+                infer_job = (
+                    Job("infer_unet",
+                        _id=f"infer_{scene_basename}{suffix}",
+                        node_label=f"infer_{scene_basename}{suffix}")
+                    .add_args(*infer_args)
+                    .add_inputs(model_file, input_file, model_py_file,
+                                metadata_file)
+                    .add_outputs(out_file, stage_out=True,
+                                 register_replica=False)
+                )
+                self.wf.add_jobs(infer_job)
+
 
 # ======================================================================
 # main()
@@ -681,6 +726,17 @@ Examples:
     parser.add_argument("--training-mode", type=str, default="single-gpu",
                         choices=["single-gpu", "mirrored", "horovod"],
                         help="Training mode (default: single-gpu)")
+    parser.add_argument("--infer", action="store_true",
+                        help="After training, run infer_unet on whole scenes "
+                             "and emit colour-coded prediction PNGs "
+                             "({orig,filtered}_infer_<scene>.png). "
+                             "The filtered branch applies the same "
+                             "only_shadow_cloud_removal filter to each scene "
+                             "before predicting.")
+    parser.add_argument("--infer-images", type=str, nargs="+", default=None,
+                        help="Scenes to run inference on (default: same as "
+                             "--images). Use this to predict on scenes that "
+                             "weren't part of the training corpus.")
     parser.add_argument("--epochs", type=int, default=50, help="Training epochs")
     parser.add_argument("--batch-size", type=int, default=32, help="Training batch size")
     parser.add_argument("--n-classes", type=int, default=3, help="Segmentation classes")
@@ -689,11 +745,22 @@ Examples:
 
     args = parser.parse_args()
 
+    # Default inference scenes to the training corpus when --infer is on
+    # but no separate --infer-images list was supplied.
+    if args.infer_images is None:
+        args.infer_images = args.images
+
     # Validate inputs
     for img_path in args.images:
         if not os.path.exists(img_path):
             logger.error(f"Image not found: {img_path}")
             sys.exit(1)
+
+    if args.infer:
+        for img_path in args.infer_images:
+            if not os.path.exists(img_path):
+                logger.error(f"Inference image not found: {img_path}")
+                sys.exit(1)
 
     if not args.auto_label and args.train_images_dir and not os.path.isdir(args.train_images_dir):
         logger.error(f"Training images directory not found: {args.train_images_dir}")

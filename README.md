@@ -294,6 +294,8 @@ python workflow_generator.py \
 | `--auto-label` | off | Single-DAG mode: splits source scenes + masks into matched 256×256 tiles for Stage 2 (no external dirs needed) |
 | `--paths` | both | Which auto-label training path(s) to run: `both` (orig + thin-cloud/shadow-filtered, paper Table IV), `orig`, or `filtered`. With `both`, outputs are suffixed `_orig` / `_filtered`. |
 | `--filtered-labels` | filtered | How the filtered branch's labels are produced. `filtered` color-segments the *filtered* tiles so input and target are self-consistent (reproduces the paper's ~99%). `raw` reuses raw-scene labels (filtered input vs raw target — the honest cross-comparison, ~90%). |
+| `--infer` | off | After training, run `infer_unet` end-to-end on every scene (paper Fig 9): tile → optional filter → predict → merge → colour-coded prediction PNG. The filtered branch passes `--filter` so inference matches its training distribution. Outputs are named `{orig,filtered}_infer_<scene>.png`. |
+| `--infer-images` | (same as `--images`) | Override the scenes used for inference — useful for predicting on fresh scenes that weren't part of the training corpus. |
 | `--train-images-dir` | None | Training images directory (enables Stage 2; not needed with `--auto-label`) |
 | `--train-masks-dir` | None | Training masks directory (enables Stage 2; not needed with `--auto-label`) |
 | `--training-mode` | single-gpu | Training mode: `single-gpu`, `mirrored`, or `horovod` |
