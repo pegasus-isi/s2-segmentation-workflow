@@ -38,14 +38,19 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def cloud_shadow_mask(rgb):
+def cloud_shadow_mask(rgb, kernel_size=155):
     """Return a boolean cloud/shadow mask using the same pipeline as filter_image.
 
     The mask is True where the pixel is considered cloud or shadow. We
     stop at the Otsu binary stage of ``only_shadow_cloud_removal`` — that
     output (``outs2``) already separates clear ground (255) from
-    cloud/shadow regions (0).
+    cloud/shadow regions (0). ``kernel_size`` mirrors filter_image's
+    medianBlur kernel so the two pipelines stay in lockstep.
     """
+    if kernel_size < 3 or kernel_size % 2 == 0:
+        raise ValueError(
+            f"kernel_size must be odd and >= 3 (got {kernel_size}).")
+
     # Mask water first so it doesn't bias the cloud-detection.
     lower_water = (0, 0, 0)
     upper_water = (185, 255, 30)
@@ -57,7 +62,7 @@ def cloud_shadow_mask(rgb):
     img = cv2.cvtColor(without_water, cv2.COLOR_RGB2GRAY)
 
     dilated = cv2.dilate(img, np.ones((7, 7), np.uint8))
-    bg = cv2.medianBlur(dilated, 155)
+    bg = cv2.medianBlur(dilated, kernel_size)
     diff = 255 - cv2.absdiff(img, bg)
 
     # Otsu binary threshold: high values = clear, low values = cloud/shadow.
@@ -101,6 +106,9 @@ def main():
     parser.add_argument("--tile-size", type=int, default=256,
                         help="Tile size to average over (default: 256, matches "
                              "training tiles).")
+    parser.add_argument("--kernel-size", type=int, default=155,
+                        help="medianBlur kernel for background estimation "
+                             "(default: 155, matches filter_image's default).")
     args = parser.parse_args()
 
     logger.info(f"Input: {args.input}")
@@ -112,7 +120,7 @@ def main():
         sys.exit(1)
 
     rgb = cv2.cvtColor(raw, cv2.COLOR_BGR2RGB)
-    mask = cloud_shadow_mask(rgb)
+    mask = cloud_shadow_mask(rgb, kernel_size=args.kernel_size)
     logger.info(
         f"Cloud/shadow pixels: {int(mask.sum())} / {mask.size} "
         f"({mask.mean() * 100:.2f}% of scene)")

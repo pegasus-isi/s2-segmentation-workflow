@@ -129,16 +129,25 @@ s2-segmentation-workflow/
 #### Job 3d — `filter_image` (auto-label mode, filtered path)
 
 - **Source**: `bin/filter_image.py` — direct port of `only_shadow_cloud_removal()` from the
-  paper's reference notebooks (dilate → medianBlur(155) → absdiff → Otsu → bitwise → min-max
+  paper's reference notebooks (dilate → medianBlur(`kernel-size`) → absdiff → Otsu → bitwise → min-max
   normalize → truncated threshold).
-- **When**: Present when `--paths` is `both` or `filtered`.
-- **Input**: One source scene PNG (same input as `split_images`).
-- **Output**: One thin-cloud/shadow-filtered grayscale PNG, named `filtered_{basename}.png`.
-- **Parallelism**: One job per source image, all run concurrently. Runs in parallel with
-  Stage 1.
-- **HTCondor profile**: CPU-only, ~1 GB RAM (`medianBlur(155)` on a 2048² scene).
-- **Parameters**: `--input <source_scene.png>`, `--output <filtered.png>`.
-- **Dependencies**: None.
+- **When**: Present when `--paths` is `both` or `filtered`. Two emission modes:
+  - `--filter-scale scene` (default): **one** `filter_image` job per source scene,
+    consuming the whole 2048² PNG and emitting `filtered_{basename}.png`. The post-filter
+    `split_images` then tiles the filtered scene into 64 training inputs.
+  - `--filter-scale tile`: **one `filter_image` job per 256×256 training tile** consumed
+    from the raw-branch `split_images`. Emits `train_imgf_{basename}_{r}_{c}.png` directly,
+    so no second per-scene `split_images` is needed. Matches the Spark map-reduce
+    inference path in the reference notebooks.
+- **Input**: A source scene PNG (scene mode) or a 256×256 training tile (tile mode).
+- **Output**: A filtered grayscale PNG at the same dimensions as the input.
+- **Parallelism**: One job per scene (scene mode) or one per tile (tile mode), all
+  concurrent with Stage 1.
+- **HTCondor profile**: CPU-only, ~1–2 GB RAM.
+- **Parameters**: `--input`, `--output`, `--kernel-size <int>` (default 155 at scene
+  scale; auto-defaults to 19 at tile scale to keep the medianBlur kernel the same
+  fraction of the input dimension).
+- **Dependencies**: None (scene mode) or the per-tile `split_images` output (tile mode).
 
 The filtered scene then feeds a *second* `split_images` job (producing
 `train_imgf_{basename}_*.png`) and, in the default Option A configuration

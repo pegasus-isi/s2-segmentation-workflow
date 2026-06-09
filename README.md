@@ -298,6 +298,26 @@ python workflow_generator.py \
 | `--infer-images` | (same as `--images`) | Override the scenes used for inference — useful for predicting on fresh scenes that weren't part of the training corpus. |
 | `--stratified-eval` | off | Compute per-tile cloud/shadow fractions (`compute_cloud_fraction` per scene), then evaluate each trained branch on the high-cloud (`≥10%`) and low-cloud (`<10%`) test subsets separately — reproducing paper Table V and the per-stratum panels of Fig 13. Emits per-branch `{stratum}_confusion_matrix.png`, `{stratum}_metrics_table.png`, `evaluation_results_{stratum}.json`, and a `stratified_summary.json`. |
 | `--cloud-threshold` | 0.10 | Cloud-fraction cutoff between strata (matches the paper's "≥10% / <10%" split). |
+| `--filter-scale` | scene | Apply `only_shadow_cloud_removal` to the full scene (default, paper's described config) or per 256×256 training tile (`tile`, matches the Spark map-reduce inference path in the reference notebooks). |
+| `--filter-kernel-size` | auto | `medianBlur` kernel for background estimation. Auto-defaults to **155** at `--filter-scale scene` (paper's value) and **19** at `--filter-scale tile` (scaled to keep the kernel the same fraction of the input dimension). Must be odd and ≥ 3. |
+
+### Distributed-training scaling plots (paper Fig 12)
+
+`train_unet` records per-epoch wall time, samples/sec, and a `training_meta`
+block (mode / replicas / batch_size) into `training_history{_branch}.json`.
+Run the workflow at several GPU counts (e.g. 1, 2, 4, 8) and aggregate with:
+
+```bash
+python bin/generate_speedup_plot.py \
+    --history out_1gpu/training_history_filtered.json \
+              out_2gpu/training_history_filtered.json \
+              out_4gpu/training_history_filtered.json \
+              out_8gpu/training_history_filtered.json \
+    --output-dir scaling/
+```
+
+Emits `speedup_plot.png` (4 subplots — speedup vs ideal, throughput, total
+time, per-epoch time, matching paper Fig 12) and `speedup_summary.csv`.
 | `--train-images-dir` | None | Training images directory (enables Stage 2; not needed with `--auto-label`) |
 | `--train-masks-dir` | None | Training masks directory (enables Stage 2; not needed with `--auto-label`) |
 | `--training-mode` | single-gpu | Training mode: `single-gpu`, `mirrored`, or `horovod` |

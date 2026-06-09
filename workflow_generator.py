@@ -381,30 +381,65 @@ class S2SegmentationWorkflow:
                     self.wf.add_jobs(job)
                     return tiles
 
-                # ORIG path: tile the raw scene directly.
-                if build_orig:
+                # ORIG path: tile the raw scene directly. (Also produced as a
+                # prerequisite to per-tile filtering when build_filt is True
+                # and --filter-scale tile.)
+                need_orig_tiles_for_filter = (
+                    build_filt and args.filter_scale == "tile")
+                orig_tiles = None
+                if build_orig or need_orig_tiles_for_filter:
                     orig_tiles = _add_image_split(
                         input_file, f"train_img_{basename}",
                         f"split_images_{basename}")
-                    auto_label_image_tiles_orig.extend(orig_tiles)
+                    if build_orig:
+                        auto_label_image_tiles_orig.extend(orig_tiles)
 
                 # FILTERED path: clean the scene (thin-cloud/shadow removal),
                 # then tile into U-Net inputs.
                 if build_filt:
-                    filtered_file = File(f"filtered_{basename}.png")
-                    filter_job = (
-                        Job("filter_image", _id=f"filter_{basename}",
-                            node_label=f"filter_{basename}")
-                        .add_args("--input", input_file, "--output", filtered_file)
-                        .add_inputs(input_file)
-                        .add_outputs(filtered_file, stage_out=True,
-                                     register_replica=False)
-                        .add_pegasus_profiles(label=basename)
-                    )
-                    self.wf.add_jobs(filter_job)
-                    filt_tiles = _add_image_split(
-                        filtered_file, f"train_imgf_{basename}",
-                        f"split_imagesf_{basename}")
+                    if args.filter_scale == "scene":
+                        # Apply only_shadow_cloud_removal once to the full
+                        # scene, then tile the result.
+                        filtered_file = File(f"filtered_{basename}.png")
+                        filter_job = (
+                            Job("filter_image", _id=f"filter_{basename}",
+                                node_label=f"filter_{basename}")
+                            .add_args("--input", input_file,
+                                      "--output", filtered_file,
+                                      "--kernel-size", str(args.filter_kernel_size))
+                            .add_inputs(input_file)
+                            .add_outputs(filtered_file, stage_out=True,
+                                         register_replica=False)
+                            .add_pegasus_profiles(label=basename)
+                        )
+                        self.wf.add_jobs(filter_job)
+                        filt_tiles = _add_image_split(
+                            filtered_file, f"train_imgf_{basename}",
+                            f"split_imagesf_{basename}")
+                    else:
+                        # Apply only_shadow_cloud_removal per 256x256 tile so
+                        # the medianBlur kernel sees only the tile's own
+                        # local background (matches the Spark inference path).
+                        filt_tiles = []
+                        for ot in orig_tiles:
+                            ft_lfn = ot.lfn.replace(
+                                "train_img_", "train_imgf_", 1)
+                            ft = File(ft_lfn)
+                            base = os.path.splitext(ot.lfn)[0]
+                            filter_tile_job = (
+                                Job("filter_image",
+                                    _id=f"filter_tile_{base}",
+                                    node_label=f"filter_tile_{base}")
+                                .add_args("--input", ot, "--output", ft,
+                                          "--kernel-size",
+                                          str(args.filter_kernel_size))
+                                .add_inputs(ot)
+                                .add_outputs(ft, stage_out=False,
+                                             register_replica=False)
+                                .add_pegasus_profiles(label=basename)
+                            )
+                            self.wf.add_jobs(filter_tile_job)
+                            filt_tiles.append(ft)
                     auto_label_image_tiles_filt.extend(filt_tiles)
 
                     # Option A (default): derive the filtered branch's LABELS by
@@ -803,6 +838,19 @@ Examples:
     parser.add_argument("--training-mode", type=str, default="single-gpu",
                         choices=["single-gpu", "mirrored", "horovod"],
                         help="Training mode (default: single-gpu)")
+    parser.add_argument("--filter-scale", choices=["scene", "tile"],
+                        default="scene",
+                        help="Apply only_shadow_cloud_removal to the whole "
+                             "scene (default: 'scene', paper's described "
+                             "configuration) or per 256x256 training tile "
+                             "('tile', matches the Spark map-reduce inference "
+                             "path in the reference notebooks). At tile scale "
+                             "the medianBlur kernel is auto-shrunk so it stays "
+                             "the same fraction of the input dimension.")
+    parser.add_argument("--filter-kernel-size", type=int, default=None,
+                        help="medianBlur kernel for background estimation. "
+                             "Defaults: 155 at --filter-scale scene, 19 at "
+                             "--filter-scale tile. Must be odd and >= 3.")
     parser.add_argument("--stratified-eval", action="store_true",
                         help="Compute per-tile cloud/shadow fractions and "
                              "evaluate each trained branch separately on the "
@@ -835,6 +883,15 @@ Examples:
     # but no separate --infer-images list was supplied.
     if args.infer_images is None:
         args.infer_images = args.images
+
+    # Resolve filter kernel default based on scale.
+    if args.filter_kernel_size is None:
+        args.filter_kernel_size = 155 if args.filter_scale == "scene" else 19
+    if args.filter_kernel_size < 3 or args.filter_kernel_size % 2 == 0:
+        logger.error(
+            f"--filter-kernel-size must be odd and >= 3 "
+            f"(got {args.filter_kernel_size}).")
+        sys.exit(1)
 
     # Validate inputs
     for img_path in args.images:

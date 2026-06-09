@@ -33,14 +33,24 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def only_shadow_cloud_removal(ori):
+def only_shadow_cloud_removal(ori, kernel_size=155):
     """Filter thin clouds/shadows from an RGB image.
 
     Verbatim reproduction of the reference implementation used to
     produce the paper's thin-cloud/shadow-filtered results. Returns a
     3-channel image whose channels are equal (ternary 0/155/255 values),
     so channel 0 is the cleaned grayscale signal.
+
+    ``kernel_size`` is the medianBlur kernel used for background
+    estimation. The paper calibrates it to 155 on 2048x2048 scenes
+    (~7.6% of the image dimension). When filtering smaller crops (per
+    256x256 tile in the --filter-scale tile flow), scale this down
+    accordingly — kernel_size must be odd and >= 3.
     """
+    if kernel_size < 3 or kernel_size % 2 == 0:
+        raise ValueError(
+            f"kernel_size must be odd and >= 3 (got {kernel_size}).")
+
     # --- separate open water ---
     lower_water = (0, 0, 0)
     upper_water = (185, 255, 30)
@@ -54,7 +64,7 @@ def only_shadow_cloud_removal(ori):
 
     # --- background estimation + shadow/cloud subtraction ---
     dilated_img = cv2.dilate(img, np.ones((7, 7), np.uint8))
-    bg_img = cv2.medianBlur(dilated_img, 155)
+    bg_img = cv2.medianBlur(dilated_img, kernel_size)
     diff_img = 255 - cv2.absdiff(img, bg_img)
 
     _, outs2 = cv2.threshold(
@@ -101,6 +111,11 @@ def main():
     parser.add_argument("--input", required=True, help="Input scene PNG (colour)")
     parser.add_argument("--output", required=True,
                         help="Output filtered grayscale PNG")
+    parser.add_argument("--kernel-size", type=int, default=155,
+                        help="medianBlur kernel for background estimation "
+                             "(default: 155, calibrated for 2048x2048 scenes). "
+                             "Must be odd and >= 3. Scale down for smaller "
+                             "crops (e.g. ~19 for 256x256 tiles).")
     args = parser.parse_args()
 
     logger.info(f"Input: {args.input}")
@@ -112,7 +127,7 @@ def main():
         sys.exit(1)
 
     img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    filtered = only_shadow_cloud_removal(img_rgb)
+    filtered = only_shadow_cloud_removal(img_rgb, kernel_size=args.kernel_size)
 
     # Channels are equal (ternary cleaned signal); persist channel 0 as
     # single-channel grayscale so image_split --grayscale tiles it directly.

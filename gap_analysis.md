@@ -117,17 +117,25 @@ These gaps block full reproducibility of the paper's claims.
   `preprocess_data.py`; recover the missing scenes from GEE
   (`download_data.py`).
 
-### 2.4 Filter applied at full-scene scale, not per tile
+### 2.4 Filter applied at full-scene scale, not per tile — ✅ resolved
 
 - **Paper / reference code:** Ambiguous, but the Spark path appears to
   apply `only_shadow_cloud_removal` per 256×256 tile.
-- **Our workflow:** `filter_image.py` runs on the full 2048×2048 scene
-  before `split_images` tiles it. `medianBlur(155)` behaves very
-  differently at the two scales.
-- **Already acknowledged** in `comparison_report.md` §6 (difference #2).
-- **Effort to add:** **Medium.** Move `filter_image` to a per-tile job
-  downstream of `split_images`, or add `--filter-scale {scene,tile}` as a
-  switch in `workflow_generator.py`.
+- **Implemented in:** new `--filter-scale {scene,tile}` and
+  `--filter-kernel-size N` flags in `workflow_generator.py`.
+  - `filter_image.py` and `compute_cloud_fraction.py` both now expose
+    `--kernel-size` and route it to the `medianBlur` call so the same
+    code path works at either scale.
+  - At `--filter-scale tile`, the per-scene `filter_image` job is
+    replaced with one `filter_image` job per 256×256 training tile
+    (downstream of `split_images`), and `train_imgf_*.png` outputs feed
+    directly into the filtered branch's auto-label / Stage 2 chain.
+  - The kernel auto-defaults to 155 at scene scale (paper's value) and
+    19 at tile scale (scaled to stay the same fraction of the input
+    dimension).
+- **Smoke-tested** on pegasus2 in the workflow container: 64 per-tile
+  filter jobs emitted for one scene under `--filter-scale tile`, and a
+  single 256×256 tile filters successfully with `--kernel-size 19`.
 
 ---
 
@@ -142,15 +150,27 @@ These gaps block full reproducibility of the paper's claims.
 - **Effort to add:** **Small.** A `bin/generate_speedup_plot.py` consuming
   `pegasus-statistics` output.
 
-### 3.2 No reporting of training-throughput per epoch (paper Fig 12)
+### 3.2 No reporting of training-throughput per epoch (paper Fig 12) — ✅ resolved
 
 - **Paper:** Fig 12 plots distributed-training speedup, data/sec, total
   time, and time-per-epoch over 1/2/4/6/8 GPUs.
-- **Our workflow:** `training_history_*.json` records `loss`/`accuracy`
-  per epoch and `training_time_seconds`, but not data/sec or per-GPU
-  scaling.
-- **Effort to add:** **Small** if you re-run the workflow at several GPU
-  counts and aggregate.
+- **Implemented in:**
+  - `bin/train_unet.py` — new `EpochTimer` Keras callback records
+    `epoch_time_seconds`, `samples_per_second`, and a `training_meta`
+    block (mode / replicas / batch_size / samples_per_epoch / epochs)
+    into `training_history{_branch}.json`. Works for all three modes
+    (single-gpu / MirroredStrategy / Horovod) with the correct replica
+    count and Horovod's `steps_per_epoch` semantics.
+  - `bin/generate_speedup_plot.py` — aggregates N history files (one per
+    GPU count) into a 4-subplot PNG matching paper Fig 12 (speedup vs
+    ideal, samples/sec bars, total time, time/epoch) plus a
+    `speedup_summary.csv` for direct paper inclusion. Backward-compatible
+    with older history files that lack the new fields (degrades to
+    total-time-only).
+- **Smoke-tested:** `train_unet --epochs 2 --mode single-gpu` emits the
+  new fields cleanly (e.g. epoch 1 7.62 s, epoch 2 3.91 s — TF warm-up
+  visible as expected); speedup script renders correctly with both new
+  and legacy histories.
 
 ---
 
@@ -174,12 +194,12 @@ These were checked line-by-line against the reference; **no gap**:
 
 ## 5. Recommended next step
 
-§1.1 and §1.2 are now both closed. The next-highest-value addition is **§2.1
-(SSIM)** — it's small (`skimage.metrics.structural_similarity` over auto-label vs
+§1.1, §1.2, §2.4, and §3.2 are now closed. The next-highest-value addition is
+**§2.1 (SSIM)** — small (`skimage.metrics.structural_similarity` over auto-label vs
 manual-label tile pairs) and would add a new headline number for the
-auto-labeling-quality claim ("89% / 99.64% SSIM"). After that, §2.2 (manually-
-labeled validation set / U-Net-Man baseline) is the only remaining gap that blocks
-full reproducibility of Table IV's *other* column.
+auto-labeling-quality claim ("89% / 99.64% SSIM"). After that, §2.2
+(manually-labeled validation set / U-Net-Man baseline) is the only remaining
+gap that blocks full reproducibility of Table IV's *other* column.
 
 ---
 

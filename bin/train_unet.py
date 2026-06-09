@@ -51,6 +51,36 @@ def f1_m(y_true, y_pred):
     return 2 * ((precision * recall) / (precision + recall + K.epsilon()))
 
 
+class EpochTimer(tf.keras.callbacks.Callback):
+    """Record per-epoch wall time + samples/sec for paper Fig 12-style plots.
+
+    Populates two lists on ``self.history`` after ``model.fit`` returns:
+
+    - ``epoch_time_seconds`` — wall-clock seconds for each epoch's training
+      step (excludes Keras setup / teardown overhead).
+    - ``samples_per_second`` — ``samples_per_epoch / epoch_time_seconds``.
+
+    ``samples_per_epoch`` defaults to ``len(X_train)``; pass it explicitly
+    when ``model.fit`` uses ``steps_per_epoch`` (e.g. the Horovod path)
+    so the throughput number stays correct.
+    """
+
+    def __init__(self, samples_per_epoch):
+        super().__init__()
+        self.samples_per_epoch = samples_per_epoch
+        self.epoch_times = []
+        self.samples_per_sec = []
+
+    def on_epoch_begin(self, epoch, logs=None):
+        self._t0 = time.time()
+
+    def on_epoch_end(self, epoch, logs=None):
+        dt = time.time() - self._t0
+        self.epoch_times.append(dt)
+        sps = (self.samples_per_epoch / dt) if dt > 0 else 0.0
+        self.samples_per_sec.append(sps)
+
+
 def train_single_gpu(X_train, y_train_cat, args):
     """Single-GPU training."""
     model = multi_unet_model(
@@ -66,7 +96,11 @@ def train_single_gpu(X_train, y_train_cat, args):
     )
     logger.info(model.summary())
 
-    callbacks = [tf.keras.callbacks.TensorBoard(log_dir="./logs")]
+    epoch_timer = EpochTimer(samples_per_epoch=len(X_train))
+    callbacks = [
+        tf.keras.callbacks.TensorBoard(log_dir="./logs"),
+        epoch_timer,
+    ]
 
     history = model.fit(
         X_train, y_train_cat,
@@ -76,7 +110,7 @@ def train_single_gpu(X_train, y_train_cat, args):
         callbacks=callbacks,
         shuffle=False,
     )
-    return model, history
+    return model, history, epoch_timer
 
 
 def train_mirrored(X_train, y_train_cat, args):
@@ -98,7 +132,11 @@ def train_mirrored(X_train, y_train_cat, args):
         )
         logger.info(model.summary())
 
-        callbacks = [tf.keras.callbacks.TensorBoard(log_dir="./logs")]
+        epoch_timer = EpochTimer(samples_per_epoch=len(X_train))
+        callbacks = [
+            tf.keras.callbacks.TensorBoard(log_dir="./logs"),
+            epoch_timer,
+        ]
 
         batch_size = args.batch_size * strategy.num_replicas_in_sync
         history = model.fit(
@@ -109,7 +147,7 @@ def train_mirrored(X_train, y_train_cat, args):
             callbacks=callbacks,
             shuffle=False,
         )
-    return model, history
+    return model, history, epoch_timer
 
 
 def train_horovod(X_train, y_train_cat, args):
@@ -152,13 +190,17 @@ def train_horovod(X_train, y_train_cat, args):
     dataset = tf.data.Dataset.from_tensor_slices((X_tensor, y_tensor))
     dataset = dataset.repeat().shuffle(10000).batch(args.batch_size)
 
+    # Effective samples processed per epoch across all ranks.
+    steps_per_epoch = len(y_train_cat) // (args.batch_size * hvd.size())
+    samples_per_epoch = steps_per_epoch * args.batch_size * hvd.size()
+    epoch_timer = EpochTimer(samples_per_epoch=samples_per_epoch)
     callbacks = [
         hvd.callbacks.BroadcastGlobalVariablesCallback(0),
         hvd.callbacks.MetricAverageCallback(),
+        epoch_timer,
     ]
 
     verbose = 1 if hvd.rank() == 0 else 0
-    steps_per_epoch = len(y_train_cat) // (args.batch_size * hvd.size())
 
     history = model.fit(
         dataset,
@@ -167,7 +209,7 @@ def train_horovod(X_train, y_train_cat, args):
         epochs=args.epochs,
         callbacks=callbacks,
     )
-    return model, history
+    return model, history, epoch_timer
 
 
 def main():
@@ -208,11 +250,11 @@ def main():
     t0 = time.time()
 
     if args.mode == "single-gpu":
-        model, history = train_single_gpu(X_train, y_train_cat, args)
+        model, history, epoch_timer = train_single_gpu(X_train, y_train_cat, args)
     elif args.mode == "mirrored":
-        model, history = train_mirrored(X_train, y_train_cat, args)
+        model, history, epoch_timer = train_mirrored(X_train, y_train_cat, args)
     elif args.mode == "horovod":
-        model, history = train_horovod(X_train, y_train_cat, args)
+        model, history, epoch_timer = train_horovod(X_train, y_train_cat, args)
 
     t1 = time.time()
     logger.info(f"Training time: {t1 - t0:.2f} seconds")
@@ -227,9 +269,30 @@ def main():
         model.save(args.output_model)
         logger.info(f"Model saved: {args.output_model}")
 
+        # Determine the effective replica count (number of devices doing
+        # data-parallel training) so downstream throughput plots can
+        # group runs by GPU count.
+        if args.mode == "mirrored":
+            replicas = len(
+                tf.config.experimental.list_physical_devices("GPU")) or 1
+        elif args.mode == "horovod":
+            import horovod.tensorflow.keras as hvd
+            replicas = hvd.size()
+        else:
+            replicas = 1
+
         # Save training history
         hist = {k: [float(v) for v in vals] for k, vals in history.history.items()}
         hist["training_time_seconds"] = t1 - t0
+        hist["epoch_time_seconds"] = epoch_timer.epoch_times
+        hist["samples_per_second"] = epoch_timer.samples_per_sec
+        hist["training_meta"] = {
+            "mode": args.mode,
+            "replicas": replicas,
+            "batch_size": args.batch_size,
+            "samples_per_epoch": epoch_timer.samples_per_epoch,
+            "epochs": args.epochs,
+        }
         with open(args.output_history, "w") as f:
             json.dump(hist, f, indent=2)
         logger.info(f"History saved: {args.output_history}")
