@@ -241,7 +241,32 @@ Job IDs and output filenames are suffixed accordingly (e.g. `train_orig`, `train
 - **HTCondor profile**: GPU node (requires TF/Keras to load model and run predictions), 4 GB RAM, 2 cores.
 - **Dependencies**: `evaluate_model` (consumes eval_file), `train_unet` (consumes model_file, history_file), `preprocess_data` (consumes test data arrays, metadata)
 
-#### Job 8 — `infer_unet` (optional, paper Fig 9)
+#### Job 8 — `compute_cloud_fraction` (optional, paper Table V)
+
+- **Source**: `bin/compute_cloud_fraction.py`.
+- **When**: Emitted only when `--stratified-eval` is passed to `workflow_generator.py`. One job per source scene; runs in parallel with the Stage 1 colour-segmentation chain.
+- **Input**: One source scene PNG.
+- **Output**: `cloud_fraction_{basename}.json` — `{tile_basename: fraction, ...}`. Reuses the same Otsu intermediate mask produced inside `only_shadow_cloud_removal` (so the cloud/shadow definition matches the filter exactly), averaged over each 256×256 tile.
+- **Parameters**: `--input`, `--output`, `--tile-size 256`.
+- **HTCondor profile**: CPU-only, ~2 GB RAM.
+- **Dependencies**: None.
+
+#### Job 9 — `evaluate_stratified` (optional, paper Table V + Fig 13 panels)
+
+- **Source**: `bin/evaluate_stratified.py`.
+- **When**: Emitted per branch (`orig` / `filtered`) when `--stratified-eval` is passed. Consumes the branch's trained model + test split + the per-test-tile cloud fractions emitted by `preprocess_data` (which receives them via repeated `--cloud-fraction` args).
+- **Inputs**: `model{_branch}.hdf5`, `X_test{_branch}.npy`, `y_test_cat{_branch}.npy`, `test_cloud_fractions{_branch}.npy`.
+- **Outputs** (all prefixed `{branch_prefix}`):
+  - `evaluation_results_high_cloud.json`, `evaluation_results_low_cloud.json` (loss / accuracy / F1 / precision / recall per stratum)
+  - `high_cloud_confusion_matrix.png`, `low_cloud_confusion_matrix.png` (Fig 13-style)
+  - `high_cloud_per_class_metrics.json`, `low_cloud_per_class_metrics.json`
+  - `high_cloud_metrics_table.png`, `low_cloud_metrics_table.png`
+  - `stratified_summary.json` (Table V row for this branch — accuracy / F1 / n_tiles for each stratum and the threshold used)
+- **Parameters**: `--model`, `--test-data`, `--test-labels`, `--test-cloud-fractions`, `--threshold 0.10`, `--output-dir`, `--prefix`.
+- **HTCondor profile**: GPU node, 8 GB RAM, 2 cores.
+- **Dependencies**: `train_unet` (model), `preprocess_data` (test arrays + test_cloud_fractions).
+
+#### Job 10 — `infer_unet` (optional, paper Fig 9)
 
 - **Source**: `bin/infer_unet.py`.
 - **When**: Emitted only when `--infer` is passed to `workflow_generator.py`. One inference job per `(branch, scene)` pair — i.e. when `--paths both --infer` is in effect, the DAG contains `2 × N` inference jobs (N = number of `--infer-images`, defaulting to `--images`).

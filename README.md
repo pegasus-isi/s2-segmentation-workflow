@@ -296,6 +296,8 @@ python workflow_generator.py \
 | `--filtered-labels` | filtered | How the filtered branch's labels are produced. `filtered` color-segments the *filtered* tiles so input and target are self-consistent (reproduces the paper's ~99%). `raw` reuses raw-scene labels (filtered input vs raw target — the honest cross-comparison, ~90%). |
 | `--infer` | off | After training, run `infer_unet` end-to-end on every scene (paper Fig 9): tile → optional filter → predict → merge → colour-coded prediction PNG. The filtered branch passes `--filter` so inference matches its training distribution. Outputs are named `{orig,filtered}_infer_<scene>.png`. |
 | `--infer-images` | (same as `--images`) | Override the scenes used for inference — useful for predicting on fresh scenes that weren't part of the training corpus. |
+| `--stratified-eval` | off | Compute per-tile cloud/shadow fractions (`compute_cloud_fraction` per scene), then evaluate each trained branch on the high-cloud (`≥10%`) and low-cloud (`<10%`) test subsets separately — reproducing paper Table V and the per-stratum panels of Fig 13. Emits per-branch `{stratum}_confusion_matrix.png`, `{stratum}_metrics_table.png`, `evaluation_results_{stratum}.json`, and a `stratified_summary.json`. |
+| `--cloud-threshold` | 0.10 | Cloud-fraction cutoff between strata (matches the paper's "≥10% / <10%" split). |
 | `--train-images-dir` | None | Training images directory (enables Stage 2; not needed with `--auto-label`) |
 | `--train-masks-dir` | None | Training masks directory (enables Stage 2; not needed with `--auto-label`) |
 | `--training-mode` | single-gpu | Training mode: `single-gpu`, `mirrored`, or `horovod` |

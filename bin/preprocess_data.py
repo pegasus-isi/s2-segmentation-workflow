@@ -15,6 +15,7 @@ the default float64.
 import argparse
 import json
 import logging
+import os
 import sys
 
 import cv2
@@ -87,6 +88,16 @@ def main():
                         help="Number of segmentation classes (0 = auto-detect from data)")
     parser.add_argument("--metadata", default=None,
                         help="Output metadata JSON (n_classes, label mapping)")
+    parser.add_argument("--cloud-fraction", action="append", default=None,
+                        help="Per-scene cloud/shadow fraction JSON (one --cloud-fraction "
+                             "per scene). When set, the test split's cloud fractions "
+                             "are emitted alongside X_test as test_cloud_fractions.npy "
+                             "so evaluate_stratified can bucket tiles by paper's 10% "
+                             "threshold (Table V / Fig 13 stratified panels).")
+    parser.add_argument("--test-cloud-fractions", default=None,
+                        help="Output .npy aligned with X_test containing the test "
+                             "tiles' cloud/shadow fractions (required when "
+                             "--cloud-fraction is passed).")
     parser.add_argument("--random-state", type=int, default=0,
                         help="Random seed (default: 0)")
     args = parser.parse_args()
@@ -140,6 +151,39 @@ def main():
             json.dump(meta, f, indent=2)
         logger.info(f"Metadata saved to {args.metadata}")
 
+    # ── Optional cloud/shadow fractions for stratified evaluation ──
+    # Build a single lookup keyed by tile basename (sans ".png") from one or
+    # more per-scene JSON files (see bin/compute_cloud_fraction.py).
+    cloud_lookup = {}
+    if args.cloud_fraction:
+        for cf_path in args.cloud_fraction:
+            with open(cf_path) as f:
+                cloud_lookup.update(json.load(f))
+        logger.info(f"Loaded cloud fractions for {len(cloud_lookup)} tiles "
+                    f"from {len(args.cloud_fraction)} JSON file(s).")
+        if not args.test_cloud_fractions:
+            logger.error("--cloud-fraction requires --test-cloud-fractions "
+                         "to know where to write the aligned test array.")
+            sys.exit(1)
+
+    def _tile_cloud_fraction(image_path):
+        """Look up the cloud/shadow fraction for a training-image tile.
+
+        Training image tiles are named ``train_img_<scene>_<row>_<col>.png``
+        (image_split's ``--output-prefix train_img_<scene>``). Cloud
+        fractions are keyed by the equivalent ``<scene>_<row>_<col>``.
+        """
+        base = os.path.splitext(os.path.basename(image_path))[0]
+        # Strip the train_img_ / train_imgf_ prefix added by image_split when
+        # auto-labeling. compute_cloud_fraction always keys by the SCENE
+        # name (not the filtered-scene name), so for the filtered branch we
+        # strip ``train_imgf_`` and look up the matching raw-scene fraction.
+        for prefix in ("train_img_", "train_imgf_"):
+            if base.startswith(prefix):
+                base = base[len(prefix):]
+                break
+        return cloud_lookup.get(base)
+
     # ── Split file-path indices (no image data in memory) ──
     n = len(image_paths)
     indices = np.arange(n)
@@ -147,6 +191,26 @@ def main():
         indices, test_size=args.test_size, random_state=args.random_state,
     )
     logger.info(f"Split: {len(train_idx)} train, {len(test_idx)} test")
+
+    if cloud_lookup:
+        # Align test-split cloud fractions in the same order as X_test.
+        # Missing entries default to -1 so downstream code can filter them out
+        # (and so callers can spot the misalignment loudly).
+        test_fracs = np.array(
+            [_tile_cloud_fraction(image_paths[i]) or -1.0 for i in test_idx],
+            dtype=np.float32,
+        )
+        missing = int((test_fracs < 0).sum())
+        if missing:
+            logger.warning(
+                f"{missing}/{len(test_fracs)} test tiles had no cloud-fraction "
+                "entry; they will be excluded from stratified evaluation.")
+        out_dir = os.path.dirname(args.test_cloud_fractions)
+        if out_dir:
+            os.makedirs(out_dir, exist_ok=True)
+        np.save(args.test_cloud_fractions, test_fracs)
+        logger.info(f"Saved {args.test_cloud_fractions} "
+                    f"(shape {test_fracs.shape}).")
 
     # ── Process and save TRAIN split ──
     logger.info("Processing train split...")

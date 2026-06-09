@@ -45,15 +45,17 @@ logger = logging.getLogger(__name__)
 
 # Per-tool resource configuration
 TOOL_CONFIGS = {
-    "image_split":     {"memory": "512 MB", "cores": 1},
-    "color_segment":   {"memory": "256 MB", "cores": 1},
-    "filter_image":    {"memory": "2 GB",   "cores": 1},
-    "image_merge":     {"memory": "1 GB",   "cores": 1},
-    "preprocess_data": {"memory": "14 GB",   "cores": 2},
-    "train_unet":      {"memory": "14 GB",   "cores": 4, "gpus": 1},
-    "evaluate_model":  {"memory": "4 GB",   "cores": 2, "gpus": 1},
-    "generate_plots":  {"memory": "14 GB",  "cores": 2, "gpus": 1},
-    "infer_unet":      {"memory": "8 GB",   "cores": 2, "gpus": 1},
+    "image_split":            {"memory": "512 MB", "cores": 1},
+    "color_segment":          {"memory": "256 MB", "cores": 1},
+    "filter_image":           {"memory": "2 GB",   "cores": 1},
+    "image_merge":            {"memory": "1 GB",   "cores": 1},
+    "compute_cloud_fraction": {"memory": "2 GB",   "cores": 1},
+    "preprocess_data":        {"memory": "14 GB",  "cores": 2},
+    "train_unet":             {"memory": "14 GB",  "cores": 4, "gpus": 1},
+    "evaluate_model":         {"memory": "4 GB",   "cores": 2, "gpus": 1},
+    "evaluate_stratified":    {"memory": "8 GB",   "cores": 2, "gpus": 1},
+    "generate_plots":         {"memory": "14 GB",  "cores": 2, "gpus": 1},
+    "infer_unet":             {"memory": "8 GB",   "cores": 2, "gpus": 1},
 }
 
 
@@ -145,7 +147,8 @@ class S2SegmentationWorkflow:
 
         # CPU-bound transformations (Stage 1 + preprocess)
         cpu_tools = ["image_split", "color_segment", "filter_image",
-                     "image_merge", "preprocess_data"]
+                     "image_merge", "compute_cloud_fraction",
+                     "preprocess_data"]
         for tool_name in cpu_tools:
             config = TOOL_CONFIGS[tool_name]
             tx = Transformation(
@@ -164,8 +167,8 @@ class S2SegmentationWorkflow:
         # Registered on both exec and GPU sites so pegasus-plan can resolve
         # the PFN regardless of which site is passed via -s. HTCondor uses
         # request_gpus for placement on GPU-equipped nodes.
-        gpu_tools = ["train_unet", "evaluate_model", "generate_plots",
-                     "infer_unet"]
+        gpu_tools = ["train_unet", "evaluate_model", "evaluate_stratified",
+                     "generate_plots", "infer_unet"]
         for tool_name in gpu_tools:
             config = TOOL_CONFIGS[tool_name]
             pfn = os.path.join(self.wf_dir, f"bin/{tool_name}.py")
@@ -257,6 +260,7 @@ class S2SegmentationWorkflow:
         auto_label_image_tiles_filt = []  # filtered-scene 256x256 image tiles
         auto_label_mask_tiles_orig = []   # labels: color-seg of the raw scene
         auto_label_mask_tiles_filt = []   # labels: color-seg of the filtered scene
+        cloud_fraction_files = []         # one --cloud-fraction JSON per scene
         mask_tile_size = 256  # U-Net training tile size
 
         # Both the unfiltered and filtered training-image paths are built by
@@ -289,6 +293,26 @@ class S2SegmentationWorkflow:
             for tf_obj in tile_files:
                 split_job.add_outputs(tf_obj, stage_out=False, register_replica=False)
             self.wf.add_jobs(split_job)
+
+            # --- Job: compute_cloud_fraction (Table V / Fig 13 stratification)
+            if args.stratified_eval:
+                cf_file = File(f"cloud_fraction_{basename}.json")
+                cf_job = (
+                    Job("compute_cloud_fraction",
+                        _id=f"cloudfrac_{basename}",
+                        node_label=f"cloudfrac_{basename}")
+                    .add_args(
+                        "--input", input_file,
+                        "--output", cf_file,
+                        "--tile-size", str(mask_tile_size),
+                    )
+                    .add_inputs(input_file)
+                    .add_outputs(cf_file, stage_out=True,
+                                 register_replica=False)
+                    .add_pegasus_profiles(label=basename)
+                )
+                self.wf.add_jobs(cf_job)
+                cloud_fraction_files.append(cf_file)
 
             # --- Jobs: color_segment (one per tile) ---
             seg_tile_files = []
@@ -481,13 +505,14 @@ class S2SegmentationWorkflow:
                 f"Stage 2 [{label or 'default'}]: {len(train_img_files)} images, "
                 f"{len(train_mask_files)} masks")
             self._add_stage2_branch(
-                args, train_img_files, train_mask_files, model_py_file, label)
+                args, train_img_files, train_mask_files, model_py_file,
+                label, cloud_fraction_files)
 
     # ------------------------------------------------------------------
     # Stage 2 branch: preprocess → train → evaluate → plots
     # ------------------------------------------------------------------
     def _add_stage2_branch(self, args, train_img_files, train_mask_files,
-                           model_py_file, label=""):
+                           model_py_file, label="", cloud_fraction_files=None):
         """Add one U-Net training branch.
 
         label="" yields the canonical unprefixed filenames (single-path
@@ -503,6 +528,9 @@ class S2SegmentationWorkflow:
         y_train_file = File(f"y_train_cat{suffix}.npy")
         y_test_file = File(f"y_test_cat{suffix}.npy")
         metadata_file = File(f"preprocess_metadata{suffix}.json")
+        do_stratified = bool(args.stratified_eval and cloud_fraction_files)
+        test_cf_file = (File(f"test_cloud_fractions{suffix}.npy")
+                        if do_stratified else None)
 
         # --- Job: preprocess_data ---
         img_args = []
@@ -511,6 +539,12 @@ class S2SegmentationWorkflow:
         mask_args = []
         for f in train_mask_files:
             mask_args.extend(["--mask", f])
+
+        extra_args = []
+        if do_stratified:
+            for cf in cloud_fraction_files:
+                extra_args.extend(["--cloud-fraction", cf])
+            extra_args.extend(["--test-cloud-fractions", test_cf_file])
 
         preprocess_job = (
             Job("preprocess_data", _id=f"preprocess{suffix}",
@@ -526,6 +560,7 @@ class S2SegmentationWorkflow:
                 "--test-size", str(args.test_size),
                 "--n-classes", str(args.n_classes),
                 "--random-state", str(args.random_state),
+                *extra_args,
             )
             .add_inputs(*train_img_files, *train_mask_files)
             .add_outputs(x_train_file, stage_out=False, register_replica=False)
@@ -534,6 +569,10 @@ class S2SegmentationWorkflow:
             .add_outputs(y_test_file, stage_out=False, register_replica=False)
             .add_outputs(metadata_file, stage_out=False, register_replica=False)
         )
+        if do_stratified:
+            preprocess_job.add_inputs(*cloud_fraction_files)
+            preprocess_job.add_outputs(test_cf_file, stage_out=True,
+                                       register_replica=False)
         self.wf.add_jobs(preprocess_job)
 
         # --- Job: train_unet ---
@@ -574,6 +613,44 @@ class S2SegmentationWorkflow:
             .add_outputs(eval_file, stage_out=True, register_replica=False)
         )
         self.wf.add_jobs(eval_job)
+
+        # --- Job: evaluate_stratified (paper Table V / Fig 13 panels) ---
+        if do_stratified:
+            strat_summary = File(f"{prefix}stratified_summary.json")
+            strat_high_eval = File(f"{prefix}evaluation_results_high_cloud.json")
+            strat_low_eval = File(f"{prefix}evaluation_results_low_cloud.json")
+            strat_high_cm = File(f"{prefix}high_cloud_confusion_matrix.png")
+            strat_low_cm = File(f"{prefix}low_cloud_confusion_matrix.png")
+            strat_high_pc = File(f"{prefix}high_cloud_per_class_metrics.json")
+            strat_low_pc = File(f"{prefix}low_cloud_per_class_metrics.json")
+            strat_high_mt = File(f"{prefix}high_cloud_metrics_table.png")
+            strat_low_mt = File(f"{prefix}low_cloud_metrics_table.png")
+
+            strat_job = (
+                Job("evaluate_stratified",
+                    _id=f"strat_eval{suffix}",
+                    node_label=f"strat_eval{suffix}")
+                .add_args(
+                    "--model", model_file,
+                    "--test-data", x_test_file,
+                    "--test-labels", y_test_file,
+                    "--test-cloud-fractions", test_cf_file,
+                    "--threshold", str(args.cloud_threshold),
+                    "--output-dir", ".",
+                    "--prefix", prefix,
+                )
+                .add_inputs(model_file, x_test_file, y_test_file, test_cf_file)
+                .add_outputs(strat_summary, stage_out=True, register_replica=False)
+                .add_outputs(strat_high_eval, stage_out=True, register_replica=False)
+                .add_outputs(strat_low_eval, stage_out=True, register_replica=False)
+                .add_outputs(strat_high_cm, stage_out=True, register_replica=False)
+                .add_outputs(strat_low_cm, stage_out=True, register_replica=False)
+                .add_outputs(strat_high_pc, stage_out=True, register_replica=False)
+                .add_outputs(strat_low_pc, stage_out=True, register_replica=False)
+                .add_outputs(strat_high_mt, stage_out=True, register_replica=False)
+                .add_outputs(strat_low_mt, stage_out=True, register_replica=False)
+            )
+            self.wf.add_jobs(strat_job)
 
         # --- Job: generate_plots ---
         training_curves = File(f"{prefix}training_curves.png")
@@ -726,6 +803,15 @@ Examples:
     parser.add_argument("--training-mode", type=str, default="single-gpu",
                         choices=["single-gpu", "mirrored", "horovod"],
                         help="Training mode (default: single-gpu)")
+    parser.add_argument("--stratified-eval", action="store_true",
+                        help="Compute per-tile cloud/shadow fractions and "
+                             "evaluate each trained branch separately on the "
+                             "high-cloud (≥10%%) and low-cloud (<10%%) test "
+                             "subsets, reproducing the paper's Table V split "
+                             "and the per-stratum panels of Fig 13.")
+    parser.add_argument("--cloud-threshold", type=float, default=0.10,
+                        help="Cloud-fraction cutoff between strata "
+                             "(default: 0.10, matching the paper).")
     parser.add_argument("--infer", action="store_true",
                         help="After training, run infer_unet on whole scenes "
                              "and emit colour-coded prediction PNGs "

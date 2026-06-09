@@ -36,19 +36,33 @@ These gaps block full reproducibility of the paper's claims.
   `s2_vis_00.png`: 2.9 s for 64 tiles end-to-end; output predictions match
   the qualitative style of paper Fig 14.
 
-### 1.2 No cloud-coverage stratified validation (paper Table V, Fig 13)
+### 1.2 No cloud-coverage stratified validation (paper Table V, Fig 13) — ✅ resolved
 
-- **Paper:** Table V and Fig 13 split the test set into ">10% cloud and
+- **Paper:** Table V and Fig 13 split the test set into "≥10% cloud and
   shadow" vs "<10% cloud and shadow" and report 4 confusion matrices per
   model (U-Net-Man and U-Net-Auto × 2 strata × original/filtered).
-- **Reference code:** No stratification logic — labels are taken as-is.
-- **Our workflow:** `preprocess_data.py` does an 80/20 random split with
-  `random_state=0`; there is no per-tile cloud-fraction estimate and no
-  stratified evaluation.
-- **Effort to add:** **Medium.** Compute a per-tile cloud fraction (reuse
-  the water/HSV masks or threshold the filter's intermediate Otsu output),
-  emit `cloud_fraction.npy` alongside test labels, and add a stratified
-  reporting pass in `evaluate_model.py` / `generate_plots.py`.
+- **Reference code:** No stratification logic.
+- **Implemented in:**
+  - `bin/compute_cloud_fraction.py` — per-scene cloud/shadow fraction
+    JSON, computed from the same Otsu intermediate mask used inside
+    `only_shadow_cloud_removal` (so the "cloud/shadow" definition matches
+    the filter exactly).
+  - `bin/preprocess_data.py` extension — accepts repeated
+    `--cloud-fraction <json>` and emits `test_cloud_fractions.npy` aligned
+    with `X_test`. The filtered branch reuses the raw-scene fractions by
+    stripping the `train_imgf_` prefix, so both branches share an
+    apples-to-apples cloud-coverage estimate.
+  - `bin/evaluate_stratified.py` — splits the test set at the configured
+    threshold (default `0.10`), evaluates each stratum, emits Fig 13-style
+    confusion matrices + metrics tables + per-class JSON + a single
+    `stratified_summary.json` per branch (Table V row).
+  - `workflow_generator.py` — new `--stratified-eval` and
+    `--cloud-threshold` flags wire one `compute_cloud_fraction` job per
+    scene and one `evaluate_stratified` job per branch.
+- **Smoke-tested** on pegasus2 in the workflow container: 7.6% scene-wide
+  cloud/shadow on `s2_vis_00`, 12/64 tiles in the ≥10% bucket; `evaluate_stratified`
+  ran end-to-end on a synthetic 20-tile test set and produced both strata's
+  outputs in ~7 s.
 
 ### 1.3 No PySpark Map-Reduce auto-labeling (paper §B, Table II)
 
@@ -160,10 +174,12 @@ These were checked line-by-line against the reference; **no gap**:
 
 ## 5. Recommended next step
 
-§1.1 is now closed (`bin/infer_unet.py` + `--infer` flag). The next-highest-value
-addition is **§1.2 (cloud-coverage stratification)** because it unlocks Table V and
-the per-stratum panels of Fig 13. After that, §2.1 (SSIM) is small and would add a
-new headline number for the auto-labeling quality claim.
+§1.1 and §1.2 are now both closed. The next-highest-value addition is **§2.1
+(SSIM)** — it's small (`skimage.metrics.structural_similarity` over auto-label vs
+manual-label tile pairs) and would add a new headline number for the
+auto-labeling-quality claim ("89% / 99.64% SSIM"). After that, §2.2 (manually-
+labeled validation set / U-Net-Man baseline) is the only remaining gap that blocks
+full reproducibility of Table IV's *other* column.
 
 ---
 
