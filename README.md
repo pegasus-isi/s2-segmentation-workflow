@@ -300,24 +300,6 @@ python workflow_generator.py \
 | `--cloud-threshold` | 0.10 | Cloud-fraction cutoff between strata (matches the paper's "≥10% / <10%" split). |
 | `--filter-scale` | scene | Apply `only_shadow_cloud_removal` to the full scene (default, paper's described config) or per 256×256 training tile (`tile`, matches the Spark map-reduce inference path in the reference notebooks). |
 | `--filter-kernel-size` | auto | `medianBlur` kernel for background estimation. Auto-defaults to **155** at `--filter-scale scene` (paper's value) and **19** at `--filter-scale tile` (scaled to keep the kernel the same fraction of the input dimension). Must be odd and ≥ 3. |
-
-### Distributed-training scaling plots (paper Fig 12)
-
-`train_unet` records per-epoch wall time, samples/sec, and a `training_meta`
-block (mode / replicas / batch_size) into `training_history{_branch}.json`.
-Run the workflow at several GPU counts (e.g. 1, 2, 4, 8) and aggregate with:
-
-```bash
-python bin/generate_speedup_plot.py \
-    --history out_1gpu/training_history_filtered.json \
-              out_2gpu/training_history_filtered.json \
-              out_4gpu/training_history_filtered.json \
-              out_8gpu/training_history_filtered.json \
-    --output-dir scaling/
-```
-
-Emits `speedup_plot.png` (4 subplots — speedup vs ideal, throughput, total
-time, per-epoch time, matching paper Fig 12) and `speedup_summary.csv`.
 | `--train-images-dir` | None | Training images directory (enables Stage 2; not needed with `--auto-label`) |
 | `--train-masks-dir` | None | Training masks directory (enables Stage 2; not needed with `--auto-label`) |
 | `--training-mode` | single-gpu | Training mode: `single-gpu`, `mirrored`, or `horovod` |
@@ -371,13 +353,153 @@ the corresponding suffix is emitted (no suffix when no auto-label is used).
 | `metrics_table.png`, `filtered_metrics_table.png` | Classification metrics table (paper Table IV) |
 | `per_class_metrics.json`, `filtered_per_class_metrics.json` | Per-class precision, recall, F1-score, support |
 
-## Reproducing the Paper's Table IV
+## Reproducing the Paper
 
-| Condition | Paper | This workflow (run0009, default settings) |
+The paper (Iqrah et al., *"A Parallel Workflow for Polar Sea-Ice Classification using
+Auto-labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024) reports five distinct claims:
+
+| Paper item | What it measures | Reproduced by |
 |---|---|---|
-| U-Net-Auto, original | 90.18% accuracy | **94.72%** accuracy |
-| U-Net-Auto, filtered | 98.97% accuracy | **99.82%** accuracy |
+| Table IV | U-Net-Auto accuracy on original vs filtered S2 imagery | Run **A** below |
+| Table V | Same, stratified by ≥10% vs <10% cloud/shadow coverage | Run A (`--stratified-eval`) |
+| Fig 13 | Confusion matrices per stratum (U-Net-Auto row) | Run A (`--stratified-eval`) |
+| Fig 14 | Full-scene predictions on held-out scenes | Run A (`--infer`) |
+| Fig 12 | Distributed-training scaling over 1/2/4/(6)/8 GPUs | Run **C** below (sweep) |
 
-See `comparison_report.md` / `comparison_report.html` for the full reproduction study,
-per-class metrics, and a discussion of the (previously undocumented) requirement that
-the filtered condition re-derive labels from the filtered images.
+Two methodological *variants* the paper does not separate cleanly are exposed as flags
+so the difference can be measured:
+
+- **Filter scale** (`--filter-scale {scene,tile}`) — the paper describes filtering whole
+  2048×2048 scenes (Run A), but the reference Spark notebook implies a per-tile filter
+  (Run **B** below). Compare the two.
+- **Filtered-label derivation** (`--filtered-labels {filtered,raw}`) — `filtered` (default,
+  Option A) re-derives labels from the filtered tiles to give input↔target consistency;
+  `raw` keeps raw-scene labels. Filtered + raw labels yields ~90% — see
+  `comparison_report.md` §5 for the why.
+
+Gaps that are *not* yet covered are tracked in `gap_analysis.md` (most notably §2.1 SSIM,
+§2.2 U-Net-Man manual-label baseline, and the Spark map-reduce auto-labeling speedup).
+
+### Run A — paper Table IV + V + Fig 13 + Fig 14 (single submission)
+
+Reproduces the paper's headline numbers and the stratified analysis. **This is the
+canonical reproduction**: it matches the paper's described configuration (scene-scale
+filter, kernel 155, Option A self-consistent labels).
+
+```bash
+python workflow_generator.py \
+    --images data/s2_scenes/s2_vis_*.png \
+    --auto-label \
+    --filter-scale scene \
+    --stratified-eval \
+    --infer \
+    --output workflow_A.yml
+
+pegasus-plan --submit -s condorpool -o local workflow_A.yml
+```
+
+Produces (per branch — `orig` and `filtered`):
+- `evaluation_results_{orig,filtered}.json` → Table IV cells
+- `evaluation_results_{orig,filtered}_{high,low}_cloud.json` → Table V cells (U-Net-Auto)
+- `stratified_summary_{orig,filtered}.json` → Table V row summary
+- `{,filtered_}confusion_matrix.png` + `{,filtered_}{high,low}_cloud_confusion_matrix.png`
+  → Fig 13 (U-Net-Auto row)
+- `{,filtered_}infer_<scene>.png` (63 scenes × 2 branches) → Fig 14 (U-Net-Auto column)
+- `filtered_s2_vis_*.png` → paper Fig 5 cleaned-scene grid
+
+### Run B — §2.4 per-tile filter variant (optional comparison)
+
+Same as Run A but applies `only_shadow_cloud_removal` to each 256×256 training tile
+(matches the reference Spark inference path). `medianBlur` kernel auto-shrinks to 19 so
+it stays the same fraction of the input dimension.
+
+```bash
+python workflow_generator.py \
+    --images data/s2_scenes/s2_vis_*.png \
+    --auto-label \
+    --filter-scale tile \
+    --stratified-eval \
+    --infer \
+    --output workflow_B.yml
+
+pegasus-plan --submit -s condorpool -o local workflow_B.yml
+```
+
+Use Run B's filtered-branch numbers as a control for the "what if we filter per tile?"
+counterfactual. Run B does **not** produce per-scene `filtered_s2_vis_*.png` — there is no
+full-scene filter pass; only filtered training tiles exist.
+
+### Run C — paper Fig 12 distributed-training scaling sweep
+
+Re-run the training step at several replica counts and aggregate. Submit each run with a
+distinct `--output` filename so the output directories don't collide:
+
+```bash
+# 1 GPU baseline
+python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+    --auto-label --paths filtered --filter-scale scene \
+    --training-mode single-gpu --output workflow_1gpu.yml
+pegasus-plan --submit -s condorpool -o local workflow_1gpu.yml
+
+# 2/4/8 GPUs on one node (MirroredStrategy)
+for N in 2 4 8; do
+    python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+        --auto-label --paths filtered --filter-scale scene \
+        --training-mode mirrored --output workflow_${N}gpu.yml
+    # request_gpus = N is set in your HTCondor site profile.
+    pegasus-plan --submit -s condorpool -o local workflow_${N}gpu.yml
+done
+
+# Optional: Horovod multi-node (replicas across hosts)
+python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+    --auto-label --paths filtered --filter-scale scene \
+    --training-mode horovod --output workflow_horovod.yml
+pegasus-plan --submit -s condorpool -o local workflow_horovod.yml
+```
+
+After all sweeps complete, aggregate the `training_history_filtered.json` files into the
+Fig 12-style plot:
+
+```bash
+mkdir -p scaling
+cp output_1gpu/training_history_filtered.json scaling/training_history_1gpu.json
+cp output_2gpu/training_history_filtered.json scaling/training_history_2gpu.json
+cp output_4gpu/training_history_filtered.json scaling/training_history_4gpu.json
+cp output_8gpu/training_history_filtered.json scaling/training_history_8gpu.json
+
+python bin/generate_speedup_plot.py --output-dir scaling \
+    --title "U-Net training scaling — paper Fig 12 reproduction"
+```
+
+This writes `scaling/speedup_plot.png` (speedup vs ideal · samples/sec · total time ·
+time-per-epoch — matching paper Fig 12) and `scaling/speedup_summary.csv`. Each
+`training_history_*.json` now carries a `training_meta` block (mode / replicas /
+batch_size / samples_per_epoch / epochs) plus `epoch_time_seconds` and
+`samples_per_second` lists.
+
+### Side-by-side comparison report
+
+Once Run A finishes, regenerate the figure-by-figure paper comparison:
+
+```bash
+python compare_with_paper.py
+```
+
+This extracts Fig 3 / 4 / 5 / 11 / 13 / 14 / Table IV from the paper PDF, pairs them
+with the matching run outputs from `output/`, and emits `comparison_report.md` with
+side-by-side images and the headline-metric delta table.
+
+### What this reproduces vs. what is still a gap
+
+| Paper item | Covered? |
+|---|---|
+| Table IV (U-Net-Auto) | ✅ Run A |
+| Table V (U-Net-Auto, 4 cells) | ✅ Run A `--stratified-eval` |
+| Fig 13 (U-Net-Auto row) | ✅ Run A confusion matrices |
+| Fig 14 (U-Net-Auto predictions) | ✅ Run A `--infer` (126 PNGs) |
+| Fig 12 (distributed scaling) | ✅ Run C (multi-GPU sweep + aggregator) |
+| Table IV/V/Fig 13/14 **U-Net-Man rows** | ❌ §2.2 — no manually-labeled training path yet |
+| SSIM auto-label-vs-manual (89% / 99.64%) | ❌ §2.1 — not computed |
+| Spark / Map-Reduce auto-labeling speedup (Table II, Fig 10) | ❌ §1.3 — HTCondor parallelism substitutes |
+
+See `gap_analysis.md` for the full audit of paper / reference-code / workflow coverage.
