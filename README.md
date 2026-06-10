@@ -91,7 +91,7 @@ s2-segmentation-workflow/
 │   └── test_integration.py
 ├── download_data.py            # Sentinel-2 data download script (GEE)
 ├── run_manual.sh               # Bash-based local integration test
-├── specification.md            # Detailed workflow specification
+├── SPEC.md                     # Detailed workflow specification
 ├── requirements.txt            # Python dependencies
 └── README.md
 ```

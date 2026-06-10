@@ -24,21 +24,40 @@ s2-segmentation-workflow/
 │   ├── image_split.py          # Stage 1: tile splitting
 │   ├── color_segment.py        # Stage 1: HSV segmentation
 │   ├── image_merge.py          # Stage 1: tile reassembly (fan-in)
+│   ├── filter_image.py         # Auto-label: thin-cloud/shadow removal filter
+│   ├── compute_cloud_fraction.py  # Optional: per-tile cloud fractions (Table V)
 │   ├── preprocess_data.py      # Stage 2: data loading & encoding
 │   ├── train_unet.py           # Stage 2: U-Net training (3 modes)
 │   ├── evaluate_model.py       # Stage 2: model evaluation
-│   └── generate_plots.py       # Stage 2: publication figures & tables
+│   ├── evaluate_stratified.py  # Optional: cloud-stratified evaluation (Table V)
+│   ├── infer_unet.py           # Optional: whole-scene inference (Fig 9)
+│   ├── generate_plots.py       # Stage 2: publication figures & tables
+│   └── generate_speedup_plot.py  # Post-processing: Fig 12 speedup plots (not a DAG job)
 ├── Docker/
 │   └── S2_Dockerfile           # Container image definition
-├── tests/                      # pytest test suite (37 tests)
+├── tests/                      # pytest test suite (40 tests)
 ├── download_data.py            # Sentinel-2 data download script (GEE)
+├── prepare_and_run.sh          # Prepare local scenes and submit the workflow
 ├── run_manual.sh               # Bash-based local integration test
+├── compare_with_paper.py       # Side-by-side comparison report vs the paper
+├── generate_workflow_diagram.py  # Renders images/workflow.png DAG diagram
+├── gap_analysis.md             # Documented gaps vs paper and reference code
+├── comparison_report.md        # Generated paper-comparison report (+ .html)
+├── paper_figures/              # Reference figures from the paper + our outputs
 ├── requirements.txt            # Python runtime dependencies
 ├── README.md                   # Quick-start guide and CLI reference
-└── specification.md            # This file
+└── SPEC.md                     # This file
 ```
 
+> Running `workflow_generator.py` also emits Pegasus catalog files
+> (`pegasus.properties`, `replicas.yml`, `transformations.yml`, `sites.yml`,
+> `workflow.yml`) into the working directory — these are generated artifacts,
+> not source files.
+
 ## 3. Source Code Inventory
+
+The original scripts this workflow was decomposed from live in the sibling
+`S2_Parallel_Workflow/` directory:
 
 | File | Role |
 |---|---|
@@ -193,7 +212,10 @@ Job IDs and output filenames are suffixed accordingly (e.g. `train_orig`, `train
 - **Input**: `X_train.npy`, `y_train_cat.npy` from `preprocess_data`
 - **Output**:
   - `model.hdf5` — saved trained model weights
-  - `training_history.json` — loss/accuracy/F1 per epoch
+  - `training_history.json` — loss/accuracy/F1 per epoch, plus per-epoch
+    `epoch_time_seconds` and `samples_per_second` and a `training_meta` block
+    (GPU/replica count) consumed by `bin/generate_speedup_plot.py` for the
+    paper Fig 12-style speedup/throughput plots
   - `logs/` — TensorBoard log directory
 - **Parameters**:
   - `--train_data <path>` — path to X_train.npy
@@ -209,7 +231,7 @@ Job IDs and output filenames are suffixed accordingly (e.g. `train_orig`, `train
   - **Single-GPU**: Default. One HTCondor job with `request_gpus = 1`.
   - **Multi-GPU (MirroredStrategy)**: Single HTCondor job with `request_gpus = N` on one node. Uses `tf.distribute.MirroredStrategy` from `s2_u_net_tf.py`.
   - **Multi-node (Horovod)**: Submitted as an HTCondor **parallel universe** or MPI job. Uses `horovodrun -np <N>` with `s2_u_net_horovod.py`. Requires HTCondor MPI support and Horovod in the container.
-- **HTCondor profile**: `request_gpus >= 1`, `request_memory = 8 GB`, `request_cpus = 4`, long runtime.
+- **HTCondor profile**: `request_gpus >= 1`, `request_memory = 14 GB`, `request_cpus = 4`, long runtime.
 - **Dependencies**: `preprocess_data`
 
 #### Job 6 — `evaluate_model`
@@ -247,7 +269,7 @@ Job IDs and output filenames are suffixed accordingly (e.g. `train_orig`, `train
   - `--dpi 150` — plot resolution
   - `--class-names "Ice,Thin Ice,Water"` — comma-separated class names
 - **Logic**: Loads the trained model (with custom metric functions f1_m, precision_m, recall_m), runs predictions on the test set, computes per-class metrics via sklearn's `classification_report`, and generates four matplotlib figures plus a JSON summary. Uses `matplotlib.use("Agg")` for headless rendering.
-- **HTCondor profile**: GPU node (requires TF/Keras to load model and run predictions), 4 GB RAM, 2 cores.
+- **HTCondor profile**: GPU node (requires TF/Keras to load model and run predictions), 14 GB RAM, 2 cores.
 - **Dependencies**: `evaluate_model` (consumes eval_file), `train_unet` (consumes model_file, history_file), `preprocess_data` (consumes test data arrays, metadata)
 
 #### Job 8 — `compute_cloud_fraction` (optional, paper Table V)
@@ -396,6 +418,15 @@ Training masks are **not downloaded** — they are produced by Stage 1 (color se
 | `prediction_samples.png` | Output | PNG plot | ~500 KB |
 | `metrics_table.png` | Output | PNG plot | ~50 KB |
 | `per_class_metrics.json` | Output | JSON | <1 KB |
+| `filtered_{id}.png` | Intermediate | Filtered grayscale scene (scene-scale filter) | 2000×2000 |
+| `train_imgf_{id}_{row}_{col}.png` | Intermediate | Filtered training tile | 256×256 |
+| `cloud_fraction_{id}.json` | Intermediate | Per-tile cloud fractions (`--stratified-eval`) | <5 KB |
+| `test_cloud_fractions{_branch}.npy` | Intermediate | Cloud fractions for the test split | small |
+| `{branch}stratified_summary.json` + per-stratum JSON/PNG | Output | Stratified evaluation (Table V, Fig 13) | <1 MB |
+| `training_history{_branch}.json` | Output | Per-epoch metrics + timing (feeds Fig 12 plots) | <50 KB |
+| `{branch}infer_{id}.png` | Output | Whole-scene prediction (`--infer`, Fig 9) | 2000×2000 RGB |
+
+With `--paths both` (default), Stage 2 logical names carry a branch suffix/prefix (`model_orig.hdf5` / `model_filtered.hdf5`, `evaluation_results_{orig,filtered}.json`, `filtered_*.png` plots), as described in Section 4.
 
 ## 8. Dependencies and Container
 
@@ -426,11 +457,12 @@ horovod[tensorflow]
 
 ### Container Image
 
-A single Docker image should include all dependencies. The `train_unet` job requires GPU support (NVIDIA runtime).
+A single Docker image (`Docker/S2_Dockerfile`) includes all dependencies, including Horovod with OpenMPI for multi-node training. The `train_unet` job requires GPU support (NVIDIA runtime).
 
 ```
-Base: tensorflow/tensorflow:2.13.0-gpu
-+ opencv-python-headless, scikit-learn, Pillow
+Base: tensorflow/tensorflow:2.15.0-gpu
++ numpy<2.0, opencv-python-headless, scikit-learn, Pillow, matplotlib
++ openmpi + horovod[tensorflow] (HOROVOD_WITH_TENSORFLOW=1)
 ```
 
 ## 9. HTCondor Execution Configuration
@@ -447,31 +479,35 @@ Pegasus translates the DAG into an HTCondor DAGMan workflow. Each job type maps 
 
 ### Job-to-HTCondor Mapping
 
-| Job | HTCondor Universe | `request_cpus` | `request_memory` | `request_gpus` | `request_disk` | Concurrency |
-|---|---|---|---|---|---|---|
-| `image_split` | vanilla | 1 | 512 MB | 0 | 500 MB | N (one per image) |
-| `color_segment` | vanilla | 1 | 256 MB | 0 | 10 MB | N×64 (all tiles) |
-| `image_merge` | vanilla | 1 | 1 GB | 0 | 500 MB | N (one per image) |
-| `preprocess_data` | vanilla | 2 | 8 GB | 0 | 2 GB | 1 |
-| `train_unet` | vanilla (or parallel for Horovod) | 4 | 8 GB | 1+ | 5 GB | 1 |
-| `evaluate_model` | vanilla | 2 | 4 GB | 1 | 2 GB | 1 |
-| `generate_plots` | vanilla | 2 | 4 GB | 1 | 2 GB | 1 |
+Resource requests are defined in the `TOOL_CONFIGS` dict in `workflow_generator.py` and attached as Pegasus profiles on each transformation (per branch/instance counts shown for the default `--paths both`):
 
-### Pegasus Profiles for HTCondor
+| Job | HTCondor Universe | `request_cpus` | `request_memory` | `request_gpus` | Concurrency |
+|---|---|---|---|---|---|
+| `image_split` | vanilla | 1 | 512 MB | 0 | N per chain (split/images/masks) |
+| `color_segment` | vanilla | 1 | 256 MB | 0 | N×64 per branch (all tiles) |
+| `filter_image` | vanilla | 1 | 2 GB | 0 | N (scene mode) or N×64 (tile mode) |
+| `image_merge` | vanilla | 1 | 1 GB | 0 | N (one per image) |
+| `compute_cloud_fraction` | vanilla | 1 | 2 GB | 0 | N (one per scene, `--stratified-eval`) |
+| `preprocess_data` | vanilla | 2 | 14 GB | 0 | 1 per branch |
+| `train_unet` | vanilla (or parallel for Horovod) | 4 | 14 GB | 1+ | 1 per branch |
+| `evaluate_model` | vanilla | 2 | 4 GB | 1 | 1 per branch |
+| `evaluate_stratified` | vanilla | 2 | 8 GB | 1 | 1 per branch (`--stratified-eval`) |
+| `generate_plots` | vanilla | 2 | 14 GB | 1 | 1 per branch |
+| `infer_unet` | vanilla | 2 | 8 GB | 1 | N per branch (`--infer`) |
 
+### Pegasus Profiles
+
+Profiles are set via the Pegasus Python API rather than raw condor keys. GPU transformations are registered on both the CPU and GPU sites so `pegasus-plan -s <site>` can resolve the PFN either way:
+
+```python
+Transformation(...).add_pegasus_profile(
+    memory="14 GB",   # → request_memory
+    cores=4,          # → request_cpus
+    gpus=1,           # → request_gpus (GPU tools only)
+)
 ```
-# Example: color_segment jobs
-condor.request_cpus = 1
-condor.request_memory = 256
-condor.request_disk = 10240
-condor.+WantGPU = false
 
-# Example: train_unet job
-condor.request_cpus = 4
-condor.request_memory = 8192
-condor.request_gpus = 1
-condor.+WantGPU = true
-```
+All jobs for one source image share a `label=<basename>` Pegasus profile, enabling label-based clustering.
 
 ## 10. Parallelism Summary
 
@@ -487,28 +523,43 @@ condor.+WantGPU = true
 
 ## 11. Configurable Parameters
 
+All parameters are flags of `workflow_generator.py`:
+
 | Parameter | Default | Description |
 |---|---|---|
-| `tile_size` | 250 | Tile dimension for splitting |
-| `original_size` | 2000 | Original image dimension |
-| `n_classes` | 3 | Segmentation classes (ice, thin-ice, water) |
-| `test_size` | 0.20 | Train/test split ratio |
-| `epochs` | 50 | Training epochs |
-| `batch_size` | 32 | Training batch size |
-| `random_state` | 0 | Random seed for reproducibility |
+| `--images` | (required) | Input Sentinel-2 PNG scenes |
+| `--tile-size` | 250 | Tile dimension for splitting |
+| `--original-size` | 2000 | Original image dimension |
+| `--n-classes` | 3 | Segmentation classes (ice, thin-ice, water) |
+| `--test-size` | 0.20 | Train/test split ratio |
+| `--epochs` | 50 | Training epochs |
+| `--batch-size` | 32 | Training batch size |
+| `--random-state` | 0 | Random seed for reproducibility |
+| `--auto-label` | off | Single-DAG auto-label mode (Stage 1 output feeds Stage 2) |
 | `--paths` | both | Auto-label training paths: `both` (paper Table IV), `orig`, or `filtered` |
 | `--filtered-labels` | filtered | Filtered branch's label source: `filtered` (self-consistent, paper ~99%) or `raw` (filtered input vs raw labels, ~90%) |
+| `--filter-scale` | scene | Apply the cloud/shadow filter per whole scene or per 256×256 tile |
+| `--filter-kernel-size` | auto | medianBlur kernel; defaults to 155 at scene scale, 19 at tile scale |
+| `--stratified-eval` | off | Add cloud-fraction computation + stratified evaluation jobs (Table V) |
+| `--cloud-threshold` | 0.10 | Cloud-fraction cutoff between high/low strata |
+| `--infer` | off | Add whole-scene inference jobs after training (Fig 9) |
+| `--infer-images` | `--images` | Scenes to run inference on |
+| `--training-mode` | single-gpu | `single-gpu`, `mirrored`, or `horovod` |
+| `--train-images-dir` / `--train-masks-dir` | none | Pre-existing 256×256 training data (non-auto-label mode) |
+| `--container-image` | kthare10/s2-segmentation:latest | Docker image for all jobs |
+| `-e` / `--gpu-site-name` | condorpool / gpu-condorpool | CPU and GPU execution sites |
+| `-o` | workflow.yml | Output DAG file |
 
 ## 12. Refactoring Notes
 
-The existing code needs to be decomposed into standalone CLI scripts for Pegasus to invoke as individual jobs. Each script listed in Section 3 should:
+The original code has been decomposed into the standalone CLI scripts in `bin/`, which Pegasus invokes as individual jobs. Each script:
 
-1. Accept all inputs/outputs as command-line arguments (no hardcoded paths).
-2. Read from stdin or files, write to stdout or files — no shared global state.
-3. Exit with code 0 on success, non-zero on failure.
-4. Log timing and metrics to stderr.
+1. Accepts all inputs/outputs as command-line arguments (no hardcoded paths).
+2. Reads from files, writes to files — no shared global state.
+3. Exits with code 0 on success, non-zero on failure.
+4. Logs timing and metrics to stderr.
 
-The `multi_unet_model()` function (currently duplicated in both `s2_u_net_tf.py` and `s2_u_net_horovod.py`) should be extracted into a shared module (`model.py`).
+The `multi_unet_model()` function (originally duplicated in both `s2_u_net_tf.py` and `s2_u_net_horovod.py`) is extracted into the shared `bin/model.py` module, which is shipped to jobs as an input file via the Replica Catalog.
 
 ## 13. Testing
 
@@ -544,7 +595,7 @@ bash run_manual.sh
 
 ### Test Structure
 
-All tests use **synthetic data** generated via pytest fixtures (no real Sentinel-2 imagery required). Fixtures are defined in `tests/conftest.py`.
+The suite contains **40 tests** across 9 modules. All tests use **synthetic data** generated via pytest fixtures (no real Sentinel-2 imagery required). Fixtures are defined in `tests/conftest.py`. Modules that need heavyweight dependencies guard themselves with `pytest.importorskip` — the TensorFlow-based modules (`test_model`, `test_preprocess_data`, `test_train_unet`, `test_evaluate_model`) skip when TensorFlow is absent, and `test_workflow_generator` skips when `Pegasus.api` is absent, so the Stage 1 tests always run.
 
 | Test File | What It Tests | Synthetic Data |
 |---|---|---|
@@ -564,7 +615,7 @@ All tests use **synthetic data** generated via pytest fixtures (no real Sentinel
 2. **Subprocess isolation** — Wrapper scripts are tested via `subprocess.run()`, exactly as Pegasus/HTCondor would invoke them. This validates argument parsing, file I/O, and exit codes.
 3. **Fast by default** — Stage 1 tests (split/segment/merge) run in seconds. Training tests use 1 epoch with batch_size=2 on tiny 256×256 data.
 4. **Roundtrip verification** — The split→merge test verifies pixel-perfect reconstruction. The integration test verifies the full pipeline changes pixel values (segmentation was applied).
-5. **Workflow DAG validation** — `test_workflow_generator.py` verifies the correct number of jobs, unique IDs, and presence of all job types without requiring Pegasus to be installed (parses the output YAML).
+5. **Workflow DAG validation** — `test_workflow_generator.py` verifies the correct number of jobs, unique IDs, and presence of all job types by parsing the output YAML (requires the `Pegasus.api` package to generate the DAG; skipped otherwise).
 
 ### Manual Integration Test
 
@@ -574,3 +625,24 @@ The `run_manual.sh` script provides a bash-based end-to-end test that:
 3. Verifies all output files are created (including plot PNGs and per-class metrics JSON)
 
 This is useful for validating the full pipeline including Stage 2 training and plot generation on a local machine before Pegasus submission.
+
+## 14. Development and Validation Phases
+
+The workflow was developed incrementally, with each phase building on (and re-validated against) the previous one:
+
+| Phase | Scope | Validated by |
+|---|---|---|
+| 1. Core decomposition | Stage 1 + Stage 2 scripts in `bin/`, `workflow_generator.py`, shared `model.py`, container image | pytest suite on synthetic data; `run_manual.sh` end-to-end |
+| 2. Auto-label bridge | Single-DAG `--auto-label` mode wiring Stage 1 masks into Stage 2; `--pad`/`--grayscale` tile matching | `test_workflow_generator.py` auto-label DAG tests; small 2-scene submission |
+| 3. Dual-branch filtered path | `--paths both` / `--filtered-labels` (Option A), `filter_image` job, paper-comparison tooling (`compare_with_paper.py`, `comparison_report.md`) | Side-by-side comparison against paper Table IV and Figs 11/13/14 |
+| 4. Gap closure vs the paper | Items from `gap_analysis.md`: inference pipeline (Fig 9, `--infer`), cloud-stratified evaluation (Table V, `--stratified-eval`), per-tile filter (`--filter-scale tile`), per-epoch timing + speedup plots (Fig 12) | Regenerated comparison report; `gap_analysis.md` checklist |
+| 5. Full reproduction recipe | Runs A/B/C documented in README § "Reproducing the Paper" | Run A (Tables IV/V, Figs 13/14), Run B (per-tile filter counterfactual), Run C (Fig 12 scaling sweep via `generate_speedup_plot.py`) |
+
+### Validation Ladder
+
+A change is exercised at four escalating levels before a full-scale submission:
+
+1. **Unit tests** — `pytest tests/` on synthetic fixtures (seconds; no GPU, no Pegasus required for Stage 1 tests).
+2. **Local integration** — `run_manual.sh` runs the 7 core pipeline steps sequentially with tiny parameters (minutes, single machine).
+3. **Small DAG** — a 2-scene `--auto-label` submission (128 segment jobs + training) on the HTCondor pool to validate planning, staging, and container execution.
+4. **Full reproduction** — 66 scenes / 4,224 training tiles via Runs A/B/C.
