@@ -33,14 +33,28 @@
 <body>
 
 <h1>S2 Sea-Ice Segmentation — Reproduction vs. Paper</h1>
-<div class="meta"><b>Report date:</b> 2026-06-08 &nbsp;·&nbsp; <b>Workflow:</b> s2-segmentation-workflow (Pegasus, auto-label U-Net)</div>
+<div class="meta"><b>Report date:</b> 2026-06-15 (Run A + Run B comprehensive vs paper; prior updates 2026-06-13, 06-11, 06-08) &nbsp;·&nbsp; <b>Workflow:</b> s2-segmentation-workflow (Pegasus, auto-label U-Net)</div>
 <div class="meta"><b>Paper:</b> Iqrah, Wang, Xie, Prasad — "A Parallel Workflow for Polar Sea-Ice Classification using Auto-labeling of Sentinel-2 Imagery," IEEE IPDPSW 2024.</div>
 <div class="meta"><b>Reference code:</b> S2_Parallel_Workflow/ (s2_u_net_tf.py, s2_u_net_horovod.py, two notebooks).</div>
 
 <h2>1. Executive summary</h2>
 <p>We reproduced the paper's <b>U-Net-Auto</b> pipeline (HSV color-segmentation auto-labeling +
 U-Net training) as a Pegasus workflow and trained models on both <b>unfiltered</b> and
-<b>thin-cloud/shadow-filtered</b> Sentinel-2 inputs.</p>
+<b>thin-cloud/shadow-filtered</b> Sentinel-2 inputs. Two full distributed runs anchor the
+comparison: <b>Run A</b> (scene-scale filter, the paper's config) and <b>Run B</b> (per-tile
+filter). <b>§1A is the comprehensive, claim-by-claim comparison of both runs against the paper,
+including a table of what could <em>not</em> be compared and why.</b></p>
+<div class="callout">
+<b>Headline finding (pegasus2-run0002, 2026-06-13 — current canonical run).</b> The
+<b>paper-default</b> configuration (now the generator's defaults: scenes resized in-DAG to
+2048×2048, 256×256 tiles, auto-label, both branches, scene-scale filter, stratified eval,
+whole-scene inference) reaches <b class="good">96.25% accuracy</b> on original imagery (paper
+90.18%, <span class="good">+6.07 pt</span>) and <b class="good">99.76%</b> on thin-cloud/shadow
+filtered (paper 98.97%, <span class="good">+0.79 pt</span>). Resizing to 2048 eliminates the
+padding-class artifact that capped pegasus2-run0001's orig branch at 91.21% — the orig branch is
+now a clean 3-class problem and thin-ice recall recovers from 0.63 to 0.89. Cloud-stratified
+(Table V): orig high-cloud 94.32% / low-cloud 97.67%; filtered 99.64% / 99.86%. See §8.
+</div>
 <div class="callout">
 <b>Headline finding (run0009).</b> With <b>self-consistent filtered labels</b>
 (<code>--filtered-labels filtered</code>, now the default), the filtered U-Net reaches
@@ -51,6 +65,181 @@ feeding the U-Net filtered inputs while keeping labels from the <em>raw</em> sce
 regenerating labels from the filtered images closes the gap and confirms the hypothesis
 advanced in our prior report.
 </div>
+<div class="callout">
+<b>Update (pegasus2-run0001, 2026-06-11).</b> The first <b>full end-to-end distributed run</b>
+(14,317 jobs across the MAX/NCSA/HAWI GPU pool: parallel color-seg → both training branches →
+stratified evaluation → whole-scene inference on all 63 scenes × 2 models) completed with
+<b class="good">0 failed jobs</b> after two fixes (missing <code>filter_image.py</code> staging for
+infer jobs; evaluate-job memory 4→8 GB). Headline accuracy: unfiltered
+<b>91.21%</b> (paper 90.18%), filtered <b>97.71%</b> (paper 98.97%). Numbers are lower than
+run0009 because this run used the <b>native 2000×2000 scenes zero-padded to tile evenly</b>
+(run0009 used 2048×2048 resamples): the orig branch's labels are split from the full-scene mask,
+so the padding becomes a spurious <b class="warn">4th "padding" class</b> (2.54 M test pixels,
+recall 0.25) that drags down the headline number. The filtered branch re-derives labels from the
+already-padded tiles, so it has no padding class. See §8.
+</div>
+
+<h2>1A. Comprehensive comparison vs. the paper (Run A &amp; Run B)</h2>
+<p>The two production runs differ only in the thin-cloud/shadow <b>filter scale</b>:
+<b>Run A</b> (pegasus2-run0002, scene-scale filter — the paper's described configuration) and
+<b>Run B</b> (pegasus2-run0003, per-tile filter — the Spark reference's inference path).
+All numbers below are against the paper's <b>U-Net-Auto</b> column; the manually-labeled
+<b>U-Net-Man</b> results are out of scope (see <a href="#notcompared">§1A.5</a>).</p>
+
+<h3>1A.1 Table IV — overall accuracy</h3>
+<table>
+<tr><th>Condition</th><th class="n">Paper</th><th class="n">Run A (scene)</th><th class="n">Run B (tile)</th><th class="n">A−paper</th><th class="n">B−paper</th></tr>
+<tr><td>Original S2 imagery</td><td class="n">90.18%</td><td class="n good"><b>96.25%</b></td><td class="n">94.02%</td><td class="n good">+6.07</td><td class="n good">+3.84</td></tr>
+<tr><td>Thin cloud/shadow filtered</td><td class="n">98.97%</td><td class="n good"><b>99.76%</b></td><td class="n">97.52%</td><td class="n good">+0.79</td><td class="n bad">−1.45</td></tr>
+</table>
+<p>Both runs beat the paper on original imagery; Run A also beats it on filtered while Run B
+falls 1.45 pt short. Our edge over the paper traces to self-consistent auto-labels, the 63-scene
+subset, and unseeded init variance.</p>
+<div class="callout"><b>Read the orig row as a variance baseline, not a filter-scale result.</b>
+The filter only touches the <em>filtered</em> branch — the <b>original branch consumes
+byte-identical tiles in both runs</b> (same resize, split, seed-0 test split). So the 2.23 pt
+orig gap (96.25 vs 94.02) is <b>pure unseeded training variance</b>, not filter scale. The
+meaningful filter-scale comparison is the filtered row; even there a ~2 pt slice is variance of
+this magnitude — see <a href="#interp">§1A.6</a>.</div>
+
+<h3>1A.2 Table IV — precision / recall / F1 (micro-averaged, %)</h3>
+<table>
+<tr><th>Condition</th><th class="n">Paper P / R / F1</th><th class="n">Run A</th><th class="n">Run B</th></tr>
+<tr><td>Original</td><td class="n">91.14 / 91.05 / 91.10</td><td class="n">96.02 / 96.02 / 96.02</td><td class="n">93.77 / 93.76 / 93.76</td></tr>
+<tr><td>Filtered</td><td class="n">98.88 / 91.87 / 91.89</td><td class="n">99.77 / 99.77 / 99.77</td><td class="n">97.59 / 97.59 / 97.59</td></tr>
+</table>
+<p class="meta">⚠️ The paper's filtered U-Net-Auto P/R/F1 (98.88 / <b>91.87 / 91.89</b>) are internally
+inconsistent with its own 98.97% accuracy — the recall/F1 look like a typo. Our filtered
+P/R/F1 are self-consistent.</p>
+
+<h3>1A.3 Table V — cloud/shadow-stratified accuracy</h3>
+<table>
+<tr><th>Stratum</th><th>Condition</th><th class="n">Paper</th><th class="n">Run A</th><th class="n">Run B</th></tr>
+<tr><td>≥10% cloud/shadow</td><td>original</td><td class="n">79.91%</td><td class="n">94.32%</td><td class="n">90.80%</td></tr>
+<tr><td>≥10% cloud/shadow</td><td>filtered</td><td class="n">99.28%</td><td class="n good">99.64%</td><td class="n good">99.66%</td></tr>
+<tr><td>&lt;10% cloud/shadow</td><td>original</td><td class="n">93.60%</td><td class="n">97.67%</td><td class="n">95.10%*</td></tr>
+<tr><td>&lt;10% cloud/shadow</td><td>filtered</td><td class="n">98.87%</td><td class="n good">99.86%</td><td class="n good">99.92%*</td></tr>
+</table>
+<p class="meta">⚠️ <b>Run B's low-cloud rows (*) are biased HIGH (in-DAG, pre-fix).</b> They exclude
+127 zero-cloud tiles dropped by a now-fixed <code>frac or -1.0</code> bug. Those tiles turn out to
+be exactly where Run B's per-tile filter <em>fails</em> (thin→thick; see §1A.4/§1A.6), so excluding
+them <b>inflates</b> Run B's filtered low-cloud from a true ~95.9% to the 99.92% shown. The
+<b>high-cloud rows use the identical 343 tiles in both runs and are directly comparable</b>; Run A
+stratifies all 807 tiles.</p>
+<p><b>Key divergence from the paper:</b> the paper's largest filter benefit is on ≥10%-cloud
+<em>original</em> imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy is already
+high (Run A 94.32%), so our filter gain there is only ~5 pt — likely because our auto-labels are
+self-consistent with the cloudy input, so the model fits cloudy raw tiles better than the paper's
+pipeline did.</p>
+
+<h3>1A.4 Fig 13 — full confusion matrices (U-Net-Auto)</h3>
+<p class="meta">Row-normalized (%); rows = true class, cols = predicted (<b>diagonal = recall</b>,
+bold). Off-diagonals are the cloud-shadow confusion the paper highlights. All on 807 test tiles
+(Run A recomputed from preserved scratch; Run B orig recomputed, filtered reconstructed as
+overall−high counts — predictions cleaned on success). "?" = Fig 13 cell not legible.</p>
+
+<p><b>≥10% cloud/shadow · original</b> (paper "cloudy-shadowy")</p>
+<table>
+<tr><th>Source</th><th>true \ pred</th><th class="n">thin</th><th class="n">thick</th><th class="n">water</th></tr>
+<tr><td rowspan="3">Paper</td><td>thin</td><td class="n"><b>95.3</b></td><td class="n">3.9</td><td class="n">0.8</td></tr>
+<tr><td>thick</td><td class="n bad">24.1</td><td class="n"><b>76.0</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">7.6</td><td class="n">0.2</td><td class="n"><b>92.2</b></td></tr>
+<tr><td rowspan="3">Run A</td><td>thin</td><td class="n"><b>91.2</b></td><td class="n">7.8</td><td class="n">1.1</td></tr>
+<tr><td>thick</td><td class="n">2.2</td><td class="n"><b>97.8</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">9.9</td><td class="n">0.1</td><td class="n"><b>90.0</b></td></tr>
+<tr><td rowspan="3">Run B</td><td>thin</td><td class="n"><b>82.7</b></td><td class="n bad">16.6</td><td class="n">0.7</td></tr>
+<tr><td>thick</td><td class="n">1.6</td><td class="n"><b>98.5</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n bad">14.5</td><td class="n">0.3</td><td class="n"><b>85.2</b></td></tr>
+</table>
+
+<p><b>≥10% cloud/shadow · filtered</b> (paper "cloud-shadow-removed")</p>
+<table>
+<tr><th>Source</th><th>true \ pred</th><th class="n">thin</th><th class="n">thick</th><th class="n">water</th></tr>
+<tr><td rowspan="3">Paper</td><td>thin</td><td class="n"><b>98.9</b></td><td class="n">1.0</td><td class="n">0.1</td></tr>
+<tr><td>thick</td><td class="n">0.5</td><td class="n"><b>99.5</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">?</td><td class="n">?</td><td class="n"><b>97.0</b></td></tr>
+<tr><td rowspan="3">Run A</td><td>thin</td><td class="n"><b>99.9</b></td><td class="n">0.1</td><td class="n">0.0</td></tr>
+<tr><td>thick</td><td class="n">0.5</td><td class="n"><b>99.5</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">0.0</td><td class="n">0.0</td><td class="n"><b>100.0</b></td></tr>
+<tr><td rowspan="3">Run B</td><td>thin</td><td class="n"><b>98.2</b></td><td class="n">1.8</td><td class="n">0.0</td></tr>
+<tr><td>thick</td><td class="n">0.1</td><td class="n"><b>100.0</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">0.0</td><td class="n">0.0</td><td class="n"><b>100.0</b></td></tr>
+</table>
+
+<p><b>&lt;10% cloud/shadow · original</b> (paper "cloud-shadow-free")</p>
+<table>
+<tr><th>Source</th><th>true \ pred</th><th class="n">thin</th><th class="n">thick</th><th class="n">water</th></tr>
+<tr><td rowspan="3">Paper</td><td>thin</td><td class="n"><b>85.7</b></td><td class="n">13.6</td><td class="n">0.7</td></tr>
+<tr><td>thick</td><td class="n">1.4</td><td class="n"><b>98.6</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">3.0</td><td class="n">0.0</td><td class="n"><b>97.0</b></td></tr>
+<tr><td rowspan="3">Run A</td><td>thin</td><td class="n"><b>84.8</b></td><td class="n">14.4</td><td class="n">0.8</td></tr>
+<tr><td>thick</td><td class="n">0.7</td><td class="n"><b>99.3</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">0.4</td><td class="n">0.0</td><td class="n"><b>99.5</b></td></tr>
+<tr><td rowspan="3">Run B</td><td>thin</td><td class="n bad"><b>72.8</b></td><td class="n bad">26.4</td><td class="n">0.7</td></tr>
+<tr><td>thick</td><td class="n">0.4</td><td class="n"><b>99.6</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">0.6</td><td class="n">0.1</td><td class="n"><b>99.3</b></td></tr>
+</table>
+
+<p><b>&lt;10% cloud/shadow · filtered</b></p>
+<table>
+<tr><th>Source</th><th>true \ pred</th><th class="n">thin</th><th class="n">thick</th><th class="n">water</th></tr>
+<tr><td rowspan="3">Paper</td><td>thin</td><td class="n"><b>97.9</b></td><td class="n">2.0</td><td class="n">0.1</td></tr>
+<tr><td>thick</td><td class="n">0.9</td><td class="n"><b>99.1</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">?</td><td class="n">?</td><td class="n"><b>98.8</b></td></tr>
+<tr><td rowspan="3">Run A</td><td>thin</td><td class="n"><b>99.6</b></td><td class="n">0.4</td><td class="n">0.0</td></tr>
+<tr><td>thick</td><td class="n">0.2</td><td class="n"><b>99.8</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">0.0</td><td class="n">0.0</td><td class="n"><b>100.0</b></td></tr>
+<tr><td rowspan="3">Run B</td><td>thin</td><td class="n bad"><b>60.5</b></td><td class="n bad">39.5</td><td class="n">0.0</td></tr>
+<tr><td>thick</td><td class="n">0.0</td><td class="n"><b>100.0</b></td><td class="n">0.0</td></tr>
+<tr><td>water</td><td class="n">0.0</td><td class="n">0.0</td><td class="n"><b>100.0</b></td></tr>
+</table>
+
+<p>The paper's signature error — <b>thick ice misread as thin</b> under ≥10% cloud (24.1% off-diagonal,
+76.0% thick recall) — is <em>absent</em> in our runs (thick recall ~98%). Our error runs the other
+way (<b>thin→thick</b>), and <b>Run B's per-tile filter makes it dramatically worse</b>: on the
+clearest (&lt;10% cloud) filtered tiles, Run B sends <b class="bad">39.5% of thin ice → thick</b>
+(thin recall 60.5%) where Run A holds 99.6%. The paper and Run A both drive nearly all
+off-diagonals to ~0 after filtering; Run B's filtered branch does not. See §1A.6.</p>
+
+<h3 id="notcompared">1A.5 Paper-claim coverage — what is and isn't compared</h3>
+<table>
+<tr><th>Paper item</th><th>Status</th><th>Notes / reason</th></tr>
+<tr><td>Table IV (U-Net-Auto accuracy)</td><td class="good">Compared</td><td>§1A.1</td></tr>
+<tr><td>Table IV P/R/F1</td><td class="good">Compared</td><td>§1A.2 (paper has an apparent typo)</td></tr>
+<tr><td>Table V (stratified, U-Net-Auto)</td><td class="good">Compared</td><td>§1A.3 (Run B low-cloud caveat)</td></tr>
+<tr><td>Fig 13 auto-labeled confusion matrices</td><td class="good">Compared</td><td>§1A.4 (diagonals)</td></tr>
+<tr><td>Fig 5 filtered-scene grid</td><td class="warn">Run A only</td><td>Run B has no full-scene filter pass → no <code>filtered_s2_vis_*.png</code></td></tr>
+<tr><td>Fig 6 / Fig 11 color-seg auto-labeling</td><td class="good">Qualitative</td><td>masks reproduced (figure sections below)</td></tr>
+<tr><td>Fig 14 whole-scene predictions</td><td class="good">Qualitative</td><td>126 PNGs per run; no paper numbers to match</td></tr>
+<tr><td><b>Table IV/V U-Net-Man column</b></td><td class="bad">Not compared</td><td>No manual ground-truth labels in our dataset — we only run the auto-labeling (U-Net-Auto) path.</td></tr>
+<tr><td><b>Fig 13 manually-labeled matrices</b></td><td class="bad">Not compared</td><td>Same — no U-Net-Man model.</td></tr>
+<tr><td><b>Auto-labeling SSIM (89% / 99.64%)</b></td><td class="bad">Not compared</td><td>SSIM is measured against manual labels; none available.</td></tr>
+<tr><td><b>Table I — Python multiprocessing speedup (4.5×)</b></td><td class="bad">Not compared</td><td>Reference uses <code>multiprocessing.Pool</code> on one host; our pipeline parallelizes via Pegasus/HTCondor job fan-out — a different model, not benchmarked.</td></tr>
+<tr><td><b>Table II — PySpark map-reduce speedup (16.25×)</b></td><td class="bad">Not compared</td><td>Spark map-reduce not used; the Pegasus DAG replaces it.</td></tr>
+<tr><td><b>Table III / Fig 12 — Horovod training scaling (7.21× @ 8 GPU)</b></td><td class="bad">Not run</td><td>Needs a 1/2/4/6/8-GPU sweep on a DGX-class node (Run C); our runs used single-GPU training.</td></tr>
+<tr><td><b>Dataset size (66 scenes / 4224 tiles)</b></td><td class="warn">Differs</td><td>We use 63 scenes / 4032 tiles — matches the reference code's <code>train_images_4032/</code>; <code>s2_vis_56/57/64</code> absent from our GEE export.</td></tr>
+</table>
+<p>The regenerable markdown twin of this whole section is <code>comparison_report.md</code> §0
+(produced by <code>compare_with_paper.py --run-dir-b</code>).</p>
+
+<h3 id="interp">1A.6 Interpreting Run A vs Run B — variance vs. filter scale</h3>
+<ul>
+<li><b>Original branch = variance baseline.</b> A and B feed the orig branch identical tiles, so
+its gaps are pure unseeded training variance: overall accuracy 96.25 vs 94.02 (2.2 pt) and
+thin-ice recall swings ~12 pt (Run A &lt;10% 84.8% vs Run B 72.8%). Treat any single-run gap of
+this size as noise.</li>
+<li><b>Filtered branch = the real filter-scale comparison.</b> Here the gap is larger than the
+variance baseline and concentrated in <b>thin ice</b>: Run A (scene filter) holds thin-ice recall at
+<b class="good">99.8%</b> overall, while Run B (per-tile filter) drops to <b class="bad">81.1%</b>
+overall and <b class="bad">60.5%</b> on the clearest (&lt;10% cloud) tiles. The per-tile
+<code>medianBlur(19)</code>, lacking scene context, distorts thin-ice tiles enough that the U-Net
+reads them as thick. This 39-pt low-cloud gap exceeds the ~12-pt orig variance, so it is most
+likely a <b>genuine penalty of per-tile filtering</b> — though seeded repeats are needed for an
+error bar.</li>
+<li><b>The zero-cloud bug interacted with this.</b> Run B's in-DAG stratified eval dropped the 127
+zero-cloud tiles — exactly the clear, thin-ice-heavy tiles its filter handles worst — so its raw
+per-stratum PNGs (thin recall ~98%) flattered it. The §1A.4 matrices use the corrected full sets.</li>
+</ul>
 
 <h2>2. Runs executed</h2>
 <table>
@@ -59,6 +248,9 @@ advanced in our prior report.
 <tr><td>run0007</td><td>filtered (standalone, raw labels)</td><td>U-Net-Auto on <code>only_shadow_cloud_removal</code> inputs + raw-scene labels</td><td class="good">Success</td></tr>
 <tr><td>run0008</td><td>both-paths (raw labels)</td><td>orig + filtered (input-only) in one DAG</td><td class="good">Success</td></tr>
 <tr class="hi"><td><b>run0009</b></td><td><b>both-paths (Option A)</b></td><td>orig + filtered with <b>self-consistent filtered labels</b> (paper-faithful)</td><td class="good">Success</td></tr>
+<tr><td>pegasus2-run0001</td><td>both-paths + infer + stratified (distributed)</td><td>Full pipeline on native 2000² scenes (zero-padded), 14,317 jobs on multi-site GPU pool</td><td class="good">Success (after 2 in-flight fixes)</td></tr>
+<tr class="hi"><td><b>pegasus2-run0002</b></td><td><b>Run A — paper-default (scene filter, resized 2048²)</b></td><td>Scenes resized to 2048² (no padding) + mask-pad fix + correct class colours. 14,317 jobs. Stratified eval recovered post-run via surgical replay (cloud-fraction key bug, now fixed in-code).</td><td class="good">Success (stratified recovered)</td></tr>
+<tr class="hi"><td><b>pegasus2-run0003</b></td><td><b>Run B — per-tile filter variant</b></td><td>Identical to Run A but <code>--filter-scale tile</code> (4,032 per-tile filter jobs, kernel 19). 14,385 jobs, fully clean — stratified eval ran in-DAG (cloud-fraction fix held). Low-cloud stratified later recomputed on all 807 tiles for the zero-cloud bug.</td><td class="good">Success</td></tr>
 </table>
 <p><span class="pill">63 scenes · 2048² · 4032 tiles of 256² · 50 epochs · batch 32 · Adam · 3 classes · random_state=0</span></p>
 <p>run0009 was produced by the updated <code>workflow_generator.py</code> whose default now
@@ -69,8 +261,14 @@ to recover the run0008 behaviour.</p>
 <h2>3. Overall metrics — ours vs. paper</h2>
 <table>
 <tr><th>Source</th><th>Condition</th><th class="n">Accuracy</th><th class="n">F1</th><th class="n">Precision</th><th class="n">Recall</th></tr>
-<tr class="hi"><td><b>Ours — run0009</b></td><td>unfiltered (orig)</td><td class="n"><b>94.72%</b></td><td class="n"><b>0.9446</b></td><td class="n">0.9447</td><td class="n">0.9446</td></tr>
-<tr class="hi"><td><b>Ours — run0009</b></td><td><b>filtered (self-consistent labels)</b></td><td class="n good"><b>99.82%</b></td><td class="n good"><b>0.9983</b></td><td class="n">0.9983</td><td class="n">0.9983</td></tr>
+<tr class="hi"><td><b>Ours — pegasus2-run0002</b></td><td><b>unfiltered (orig, resized 2048², no padding)</b></td><td class="n good"><b>96.25%</b></td><td class="n good"><b>0.9602</b></td><td class="n">0.9602</td><td class="n">0.9602</td></tr>
+<tr class="hi"><td><b>Ours — pegasus2-run0002</b></td><td><b>filtered (scene filter / Run A, resized 2048²)</b></td><td class="n good"><b>99.76%</b></td><td class="n good"><b>0.9977</b></td><td class="n">0.9977</td><td class="n">0.9977</td></tr>
+<tr><td>Ours — pegasus2-run0003</td><td>unfiltered (orig, Run B — tile filter)</td><td class="n">94.02%</td><td class="n">0.9376</td><td class="n">0.9377</td><td class="n">0.9376</td></tr>
+<tr><td>Ours — pegasus2-run0003</td><td>filtered (Run B — tile filter)</td><td class="n">97.52%</td><td class="n">0.9759</td><td class="n">0.9759</td><td class="n">0.9759</td></tr>
+<tr><td>Ours — pegasus2-run0001</td><td>unfiltered (orig, padded 2000² — padding artifact)</td><td class="n">91.21%</td><td class="n">0.9096</td><td class="n">0.9105</td><td class="n">0.9087</td></tr>
+<tr><td>Ours — pegasus2-run0001</td><td>filtered (padded 2000²)</td><td class="n">97.71%</td><td class="n">0.9778</td><td class="n">0.9778</td><td class="n">0.9778</td></tr>
+<tr><td>Ours — run0009</td><td>unfiltered (orig)</td><td class="n">94.72%</td><td class="n">0.9446</td><td class="n">0.9447</td><td class="n">0.9446</td></tr>
+<tr><td>Ours — run0009</td><td>filtered (self-consistent labels)</td><td class="n good">99.82%</td><td class="n good">0.9983</td><td class="n">0.9983</td><td class="n">0.9983</td></tr>
 <tr><td>Ours — run0008</td><td>unfiltered (orig)</td><td class="n">94.08%</td><td class="n">0.9382</td><td class="n">0.9382</td><td class="n">0.9381</td></tr>
 <tr><td>Ours — run0008</td><td>filtered (raw labels)</td><td class="n">90.86%</td><td class="n">0.9066</td><td class="n">0.9066</td><td class="n">0.9066</td></tr>
 <tr><td>Ours — run0006</td><td>unfiltered (standalone)</td><td class="n">95.17%</td><td class="n">0.9496</td><td class="n">0.9496</td><td class="n">0.9495</td></tr>
@@ -87,25 +285,30 @@ to recover the run0008 behaviour.</p>
 </ul>
 
 <h2>4. Per-class metrics (run0009)</h2>
-<h3>Unfiltered (orig) — supports: thick 12,237,008 · thin 31,162,171 · water 9,488,373</h3>
+<p class="meta"><b>Class-order correction (2026-06-11):</b> label-encoder order is the sorted mask gray
+values — 29 = thin ice (blue), 76 = thick ice (red), 149 = open water (green) — matching the
+paper's Fig 13 axis order (Thin Ice, Thick Ice, Open water). Earlier revisions of this report
+had the first two class names swapped.</p>
+<h3>Unfiltered (orig) — supports: thin 12,237,008 · thick 31,162,171 · water 9,488,373</h3>
 <table>
 <tr><th>Class</th><th class="n">Precision</th><th class="n">Recall</th><th class="n">F1</th></tr>
-<tr><td>Thick ice</td><td class="n">0.947</td><td class="n bad">0.627</td><td class="n bad">0.754</td></tr>
-<tr><td>Thin ice</td><td class="n">0.871</td><td class="n">0.986</td><td class="n">0.925</td></tr>
+<tr><td>Thin ice</td><td class="n">0.947</td><td class="n bad">0.627</td><td class="n bad">0.754</td></tr>
+<tr><td>Thick ice</td><td class="n">0.871</td><td class="n">0.986</td><td class="n">0.925</td></tr>
 <tr><td>Open water</td><td class="n">1.000</td><td class="n">1.000</td><td class="n good">1.000</td></tr>
 </table>
-<h3>Filtered (self-consistent labels) — supports: thick 6,182,028 · thin 37,217,151 · water 9,488,373</h3>
-<p class="meta">Thick/thin support shifts vs. the orig branch because the cloud/shadow filter shrinks
-the thick-ice band and reassigns those pixels to thin ice.</p>
+<h3>Filtered (self-consistent labels) — supports: thin 6,182,028 · thick 37,217,151 · water 9,488,373</h3>
+<p class="meta">Thin/thick support shifts vs. the orig branch because the cloud/shadow filter shrinks
+the thin-ice band (thin clouds read as thin ice in the raw scene) and reassigns those pixels to
+thick ice.</p>
 <table>
 <tr><th>Class</th><th class="n">Precision</th><th class="n">Recall</th><th class="n">F1</th></tr>
-<tr><td>Thick ice</td><td class="n good">0.991</td><td class="n good">0.994</td><td class="n good">0.992</td></tr>
-<tr><td>Thin ice</td><td class="n good">0.999</td><td class="n good">0.999</td><td class="n good">0.999</td></tr>
+<tr><td>Thin ice</td><td class="n good">0.991</td><td class="n good">0.994</td><td class="n good">0.992</td></tr>
+<tr><td>Thick ice</td><td class="n good">0.999</td><td class="n good">0.999</td><td class="n good">0.999</td></tr>
 <tr><td>Open water</td><td class="n good">1.000</td><td class="n good">1.000</td><td class="n good">1.000</td></tr>
 </table>
 <ul>
 <li>With self-consistent labels, every class is near-perfect — exactly the regime the paper reports. The filter doubles as a near-identity preprocessor: the U-Net learns to map a (filtered, denoised) image to its own color-segmentation.</li>
-<li>The orig branch still exhibits the classic thick/thin confusion (recall 0.627 on thick ice), intrinsic to color-segmenting the raw scene where thin-cloud bias inflates the thin-ice band.</li>
+<li>The orig branch still exhibits the classic thin/thick confusion (recall 0.627 on thin ice), intrinsic to color-segmenting the raw scene where thin-cloud bias inflates the thin-ice band — the same effect the paper's Fig 13 shows for &gt;10% cloud-shadow data.</li>
 </ul>
 
 <h2>5. What changed between run0008 and run0009</h2>
@@ -153,18 +356,100 @@ the prediction.</p>
 <li>The Pegasus workflow now offers both conditions as a single DAG via <code>--paths both --filtered-labels filtered</code>, giving a controlled comparison from a single submission.</li>
 </ol>
 
-<h2>8. Recommended next steps</h2>
+<h2>8. Full distributed runs — pegasus2-run0001 & run0002</h2>
+<p>Two production-scale executions of the complete DAG (color-seg auto-labeling → both training
+branches → evaluation → <b>cloud-stratified evaluation</b> → <b>whole-scene inference</b>) on a
+multi-site HTCondor GPU pool (MAX, NCSA, HAWI workers; 14,317 jobs each).
+<b>run0001</b> (2026-06-11) used native 2000×2000 scenes zero-padded to 256-divisible — this
+exposed the padding-class artifact below.
+<b>run0002</b> (2026-06-13, <span class="good">current canonical</span>) resizes every scene to
+2048×2048 first, so tiles divide evenly and no padding enters the labels; it also pads mask edges
+with the water value as a belt-and-suspenders guard. §8.1–8.2 analyse run0001's artifact;
+§8.4 reports run0002's results.</p>
+
+<h3>8.1 The padding-class artifact (run0001 — resolved in run0002)</h3>
+<p>The orig branch's labels are produced by color-segmenting the <em>full scene</em> and then
+splitting the mask with <code>--pad</code>; the zero padding survives as a distinct gray value and
+the LabelEncoder auto-detects <b>4 classes</b> instead of 3:</p>
+<table>
+<tr><th>Class (orig branch)</th><th class="n">Precision</th><th class="n">Recall</th><th class="n">F1</th><th class="n">Support</th></tr>
+<tr><td class="warn">Tile padding (artifact)</td><td class="n">0.858</td><td class="n bad">0.251</td><td class="n bad">0.388</td><td class="n">2,542,848</td></tr>
+<tr><td>Thin ice</td><td class="n">0.931</td><td class="n">0.814</td><td class="n">0.869</td><td class="n">11,787,555</td></tr>
+<tr><td>Thick ice</td><td class="n">0.902</td><td class="n">0.994</td><td class="n">0.946</td><td class="n">29,708,225</td></tr>
+<tr><td>Open water</td><td class="n">0.932</td><td class="n">0.958</td><td class="n">0.945</td><td class="n">8,848,924</td></tr>
+</table>
+<p>The padding class is ~4.8% of test pixels with recall 0.25 — it alone accounts for most of the
+gap between this run's 91.21% and run0009's 94.72% on the orig branch. The filtered branch
+re-derives labels by color-segmenting the <em>already-padded</em> tiles, so padding is absorbed
+into the water class and only 3 classes exist (thin 0.903 / thick 0.983 / water 1.000 F1).</p>
+
+<h3>8.2 Cloud-stratified evaluation (paper Fig 13 / Table V conditions)</h3>
+<table>
+<tr><th>Condition</th><th class="n">Orig acc (run0002)</th><th class="n">Filtered acc (run0002)</th><th class="n">Orig (run0001)</th></tr>
+<tr><td>High cloud (fraction &ge; 0.1, 343 tiles)</td><td class="n">94.32%</td><td class="n good">99.64%</td><td class="n">88.85%</td></tr>
+<tr><td>Low cloud (&lt; 0.1, 464 tiles)</td><td class="n">97.67%</td><td class="n good">99.86%</td><td class="n">92.38%</td></tr>
+</table>
+<p>The filter's benefit concentrates exactly where the paper claims: on the raw scenes, high-cloud
+tiles cost ~3.3 pt of accuracy (run0002: 94.32% vs 97.67%); after filtering the gap nearly vanishes
+(99.64% vs 99.86%). This reproduces the qualitative structure of the paper's Fig 13 quadrants.
+run0002's stratification splits the 807 test tiles 343 high / 464 low (run0001 reported 343/337
+before the padding tiles were excluded).</p>
+
+<h3>8.3 Whole-scene inference</h3>
+<p>126 full-scene segmentations (63 scenes × {orig, filtered} models) staged out to
+<code>output/</code> as <code>{orig,filtered}_infer_s2_vis_NN.png</code>. Two workflow bugs were
+found and fixed during this run: (1) <code>infer_unet</code> imports <code>filter_image</code> at
+module level but the generator did not stage <code>filter_image.py</code> — all 126 infer jobs
+failed until it was added to the job inputs; (2) <code>evaluate_model</code> exceeded its 4 GB
+cgroup limit and was bumped to 8 GB. Both fixes are now in <code>workflow_generator.py</code>.</p>
+<p><b class="warn">Known defect in this run's rendered artifacts:</b> a post-run code audit
+(2026-06-11) found <code>infer_unet.py</code> had the thick/thin colour mapping inverted
+(gray 29 is blue/thin and 76 is red/thick, not vice versa) — the 126 inference PNGs from this
+run render thick ice blue and thin ice red. Plot axis labels (confusion matrices, metrics
+tables) carried the same swapped names. The numeric metrics are unaffected (training and
+evaluation use encoded integer labels). Fixed in <code>bin/infer_unet.py</code>,
+<code>bin/evaluate_stratified.py</code>, <code>bin/generate_plots.py</code>, and
+<code>compare_with_paper.py</code>; run0002 produces correctly-coloured/labelled
+artifacts.</p>
+
+<h3>8.4 run0002 — paper-default results (current canonical)</h3>
+<p>run0002 applied all of run0001's fixes plus the 2048 resize (no padding class) and the
+corrected class colours. Training times: orig 1984.3 s, filtered 542.8 s. Headline accuracy rose
+to <b class="good">96.25%</b> (orig) and <b class="good">99.76%</b> (filtered) — both above the
+paper. The orig branch is now a clean 3-class problem; thin-ice recall recovered from 0.63
+(run0001, confounded by the padding class) to <b>0.89</b>.</p>
+<table>
+<tr><th>Class (run0002 orig)</th><th class="n">Precision</th><th class="n">Recall</th><th class="n">F1</th><th class="n">Support</th></tr>
+<tr><td>Thin ice</td><td class="n">0.942</td><td class="n">0.893</td><td class="n">0.917</td><td class="n">12,237,008</td></tr>
+<tr><td>Thick ice</td><td class="n">0.963</td><td class="n">0.988</td><td class="n">0.975</td><td class="n">31,162,171</td></tr>
+<tr><td>Open water</td><td class="n">0.987</td><td class="n">0.968</td><td class="n">0.978</td><td class="n">9,488,373</td></tr>
+</table>
+<p><b class="warn">In-run bug found &amp; fixed:</b> run0002's two <code>evaluate_stratified</code>
+jobs failed because the new <code>resize_image</code> step made <code>compute_cloud_fraction</code>
+key tiles by the resized filename (<code>resized_s2_vis_NN_r_c</code>) instead of the scene name,
+so <code>preprocess_data</code> matched 0/807 test tiles to a cloud fraction and the stratified
+jobs produced no per-stratum outputs (stage-out then failed). Fixed by adding a
+<code>--key-prefix</code> option to <code>compute_cloud_fraction.py</code> (generator passes the
+scene name). The stratified outputs for run0002 above were recovered post-run by replaying
+<code>preprocess_data</code>'s deterministic split against key-corrected cloud fractions and
+re-running the two eval jobs in-container — the fraction <em>values</em> were always correct, only
+the JSON keys were wrong. Future runs need no recovery.</p>
+
+<h2>9. Recommended next steps</h2>
 <ul>
-<li><b>Seeded run</b> — fix TF/NumPy/Python seeds and re-run to quantify run-to-run variance and produce a stable headline number for publication.</li>
-<li><b>66-scene parity</b> — recover <code>s2_vis_56/57/64</code> (or document why they are missing) so the reproduction matches the paper's dataset size exactly.</li>
-<li><b>Per-tile filter parity</b> — apply <code>only_shadow_cloud_removal</code> per 256×256 tile (as the Spark reference does) and check whether the per-class numbers change measurably.</li>
+<li><b>Seeded / repeated runs</b> — training is unseeded beyond the split (matching the reference); repeat the paper-default run a few times to quantify the ~1 pt run-to-run variance and report a mean ± spread for publication.</li>
+<li><b>66-scene parity</b> — recover <code>s2_vis_56/57/64</code> (or document why they are missing) so the reproduction matches the paper's stated dataset size exactly (we use the 63 the reference code's <code>train_images_4032/</code> implies).</li>
+<li><b>Per-tile filter parity</b> — run the <code>--filter-scale tile</code> variant (Run B) and check whether the per-class numbers change measurably vs the scene-scale default.</li>
 </ul>
 
 <footer>
-Artifacts: <code>output/run0009/</code> — evaluation_results_{orig,filtered}.json, {orig prefix=none, filtered}_per_class_metrics.json,
-{,filtered_}{training_curves,confusion_matrix,prediction_samples,metrics_table}.png,
-model_{orig,filtered}.hdf5 (training times: orig 539 s, filtered 948 s).
-Prior runs retained for diff under <code>output/run0008/</code>.
+Artifacts (pegasus2-run0002, 2026-06-13): <code>output/</code> — evaluation_results_{orig,filtered}.json,
+{orig,filtered}_per_class_metrics.json, {orig,filtered}_{confusion_matrix,prediction_samples,metrics_table,training_curves}.png,
+{orig,filtered}_{stratified_summary,evaluation_results_{high,low}_cloud}.json,
+{orig,filtered}_{high,low}_cloud_{confusion_matrix,metrics_table}.png,
+{orig,filtered}_infer_s2_vis_NN.png ×126, filtered_s2_vis_NN.png, s2_vis_NN_seg.png, cloud_fraction_s2_vis_NN.json ×63
+(training times: orig 1984.3 s, filtered 542.8 s).
+Prior-run numbers (run0006–run0009, pegasus2-run0001) retained in the tables above.
 </footer>
 
 </body>

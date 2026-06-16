@@ -56,17 +56,13 @@ run_workflow() {
     local img_size="$1"
     cd "${WORKFLOW_DIR}"
 
-    # 256 divides 2048 evenly; use 250 for 2000
-    local tile_size=250
-    if [[ "${img_size}" -eq 2048 ]]; then
-        tile_size=256
-    fi
-
-    info "Generating Pegasus workflow (auto-label, both paths, tile=${tile_size}, orig=${img_size})..."
+    # The generator defaults ARE the canonical paper reproduction:
+    # scenes resized in-DAG to 2048x2048, 256x256 tiles, auto-label,
+    # both training branches, stratified eval, whole-scene inference.
+    # Native scene size (${img_size}) only matters with --scene-size 0.
+    info "Generating Pegasus workflow (paper-default configuration, native=${img_size})..."
     python3 workflow_generator.py \
         --images "${DATA_DIR}"/s2_vis_*.png \
-        --auto-label \
-        --tile-size "${tile_size}" \
         --original-size "${img_size}" \
         --output workflow.yml
 

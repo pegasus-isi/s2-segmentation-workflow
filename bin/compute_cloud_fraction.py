@@ -109,6 +109,11 @@ def main():
     parser.add_argument("--kernel-size", type=int, default=155,
                         help="medianBlur kernel for background estimation "
                              "(default: 155, matches filter_image's default).")
+    parser.add_argument("--key-prefix", default=None,
+                        help="Tile-key prefix in the output JSON (default: the "
+                             "input filename stem). Pass the original SCENE name "
+                             "when --input is a resized/derived file, so keys "
+                             "match the training tiles' <scene>_<row>_<col>.")
     args = parser.parse_args()
 
     logger.info(f"Input: {args.input}")
@@ -125,7 +130,8 @@ def main():
         f"Cloud/shadow pixels: {int(mask.sum())} / {mask.size} "
         f"({mask.mean() * 100:.2f}% of scene)")
 
-    basename = os.path.splitext(os.path.basename(args.input))[0]
+    basename = args.key_prefix or os.path.splitext(
+        os.path.basename(args.input))[0]
     fractions = per_tile_fractions(mask, args.tile_size, basename)
     logger.info(
         f"Tiles: {len(fractions)} (max frac {max(fractions.values(), default=0):.3f}, "

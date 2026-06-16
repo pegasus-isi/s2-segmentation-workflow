@@ -18,6 +18,8 @@ venv/
 
 # Workflow outputs and scratch
 output/
+output_runA/
+output_runB/
 output.tgz
 scratch/
 test_run/

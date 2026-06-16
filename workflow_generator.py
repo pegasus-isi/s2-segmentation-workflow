@@ -45,6 +45,7 @@ logger = logging.getLogger(__name__)
 
 # Per-tool resource configuration
 TOOL_CONFIGS = {
+    "resize_image":           {"memory": "1 GB",   "cores": 1},
     "image_split":            {"memory": "512 MB", "cores": 1},
     "color_segment":          {"memory": "256 MB", "cores": 1},
     "filter_image":           {"memory": "2 GB",   "cores": 1},
@@ -52,7 +53,7 @@ TOOL_CONFIGS = {
     "compute_cloud_fraction": {"memory": "2 GB",   "cores": 1},
     "preprocess_data":        {"memory": "14 GB",  "cores": 2},
     "train_unet":             {"memory": "14 GB",  "cores": 4, "gpus": 1},
-    "evaluate_model":         {"memory": "4 GB",   "cores": 2, "gpus": 1},
+    "evaluate_model":         {"memory": "8 GB",   "cores": 2, "gpus": 1},
     "evaluate_stratified":    {"memory": "8 GB",   "cores": 2, "gpus": 1},
     "generate_plots":         {"memory": "14 GB",  "cores": 2, "gpus": 1},
     "infer_unet":             {"memory": "8 GB",   "cores": 2, "gpus": 1},
@@ -146,8 +147,8 @@ class S2SegmentationWorkflow:
         )
 
         # CPU-bound transformations (Stage 1 + preprocess)
-        cpu_tools = ["image_split", "color_segment", "filter_image",
-                     "image_merge", "compute_cloud_fraction",
+        cpu_tools = ["resize_image", "image_split", "color_segment",
+                     "filter_image", "image_merge", "compute_cloud_fraction",
                      "preprocess_data"]
         for tool_name in cpu_tools:
             config = TOOL_CONFIGS[tool_name]
@@ -226,6 +227,14 @@ class S2SegmentationWorkflow:
         model_py = os.path.join(self.wf_dir, "bin/model.py")
         self.rc.add_replica("local", "model.py", "file://" + model_py)
 
+        # Register filter_image.py as a support file — infer_unet imports
+        # only_shadow_cloud_removal from it at module level, so every infer
+        # job needs it staged alongside the executable.
+        filter_image_py = os.path.join(self.wf_dir, "bin/filter_image.py")
+        self.rc.add_replica(
+            "local", "filter_image.py", "file://" + filter_image_py
+        )
+
         # Register training data if Stage 2 is enabled (non-auto-label mode)
         # In auto-label mode, training images and masks are produced by
         # split_images / split_masks jobs within the DAG — nothing to register.
@@ -246,8 +255,42 @@ class S2SegmentationWorkflow:
         self.wf = Workflow(self.wf_name, infer_dependencies=True)
 
         tile_size = args.tile_size
-        original_size = args.original_size
-        grid = original_size // tile_size  # tiles per dimension
+
+        # Paper geometry: 2048x2048 scenes tile evenly into 256x256 (66
+        # scenes -> 4224 tiles, §IV-A). --scene-size resizes every scene
+        # in-DAG before any tiling; 0 keeps the native size, in which
+        # case edge tiles are padded.
+        scene_size = args.scene_size if args.scene_size else args.original_size
+
+        # --- Jobs: resize_image (one per unique scene, incl. infer-only) ---
+        # scene_files maps basename -> the File every downstream job consumes
+        # (the resized scene, or the raw scene when --scene-size 0).
+        scene_files = self.scene_files = {}
+        all_scene_paths = list(args.images)
+        if args.infer and args.infer_images:
+            all_scene_paths += list(args.infer_images)
+        for img_path in dict.fromkeys(all_scene_paths):
+            basename = os.path.splitext(os.path.basename(img_path))[0]
+            if basename in scene_files:
+                continue
+            raw_file = File(os.path.basename(img_path))
+            if args.scene_size:
+                resized_file = File(f"resized_{basename}.png")
+                resize_job = (
+                    Job("resize_image", _id=f"resize_{basename}",
+                        node_label=f"resize_{basename}")
+                    .add_args("--input", raw_file,
+                              "--output", resized_file,
+                              "--size", str(args.scene_size))
+                    .add_inputs(raw_file)
+                    .add_outputs(resized_file, stage_out=False,
+                                 register_replica=False)
+                    .add_pegasus_profiles(label=basename)
+                )
+                self.wf.add_jobs(resize_job)
+                scene_files[basename] = resized_file
+            else:
+                scene_files[basename] = raw_file
 
         # ============================================================
         # Stage 1: Color Segmentation (per-image fan-out / fan-in)
@@ -270,12 +313,12 @@ class S2SegmentationWorkflow:
 
         for img_path in args.images:
             basename = os.path.splitext(os.path.basename(img_path))[0]
-            input_file = File(os.path.basename(img_path))
+            input_file = scene_files[basename]
 
             # --- Job: image_split ---
             tile_files = []
-            for r in range(0, original_size, tile_size):
-                for c in range(0, original_size, tile_size):
+            for r in range(0, scene_size, tile_size):
+                for c in range(0, scene_size, tile_size):
                     tile_lfn = f"{basename}_{str(r).zfill(4)}_{str(c).zfill(4)}.png"
                     tile_files.append(File(tile_lfn))
 
@@ -305,6 +348,10 @@ class S2SegmentationWorkflow:
                         "--input", input_file,
                         "--output", cf_file,
                         "--tile-size", str(mask_tile_size),
+                        # input_file may be the resized scene; key by the
+                        # original scene name so the JSON keys match the
+                        # training tiles' <scene>_<row>_<col>.
+                        "--key-prefix", basename,
                     )
                     .add_inputs(input_file)
                     .add_outputs(cf_file, stage_out=True,
@@ -345,7 +392,7 @@ class S2SegmentationWorkflow:
                     *input_args,
                     "--output", merged_file,
                     "--tile-size", str(tile_size),
-                    "--original-size", str(original_size),
+                    "--original-size", str(scene_size),
                 )
                 .add_inputs(*seg_tile_files)
                 .add_outputs(merged_file, stage_out=True, register_replica=False)
@@ -359,8 +406,8 @@ class S2SegmentationWorkflow:
                 def _add_image_split(src_file, img_prefix, job_id):
                     """Add a split_images job; return its 256x256 tile Files."""
                     tiles = []
-                    for r in range(0, original_size, mask_tile_size):
-                        for c in range(0, original_size, mask_tile_size):
+                    for r in range(0, scene_size, mask_tile_size):
+                        for c in range(0, scene_size, mask_tile_size):
                             tile_lfn = (f"{img_prefix}_{str(r).zfill(4)}_"
                                         f"{str(c).zfill(4)}.png")
                             tiles.append(File(tile_lfn))
@@ -467,8 +514,8 @@ class S2SegmentationWorkflow:
                 # split_masks: split merged seg mask → 256x256 grayscale tiles
                 mask_prefix = f"train_mask_{basename}_seg"
                 mask_tiles = []
-                for r in range(0, original_size, mask_tile_size):
-                    for c in range(0, original_size, mask_tile_size):
+                for r in range(0, scene_size, mask_tile_size):
+                    for c in range(0, scene_size, mask_tile_size):
                         tile_lfn = f"{mask_prefix}_{str(r).zfill(4)}_{str(c).zfill(4)}.png"
                         mask_tiles.append(File(tile_lfn))
 
@@ -481,6 +528,9 @@ class S2SegmentationWorkflow:
                         "--tile-size", str(mask_tile_size),
                         "--grayscale",
                         "--pad",
+                        # Pad mask edges with the open-water gray value so
+                        # padding cannot become a phantom 4th label class.
+                        "--pad-value", "149",
                     )
                     .add_inputs(merged_file)
                     .add_pegasus_profiles(label=basename)
@@ -729,7 +779,7 @@ class S2SegmentationWorkflow:
             infer_filter = (label == "filtered")
             for img_path in args.infer_images:
                 scene_basename = os.path.splitext(os.path.basename(img_path))[0]
-                input_file = File(os.path.basename(img_path))
+                input_file = self.scene_files[scene_basename]
                 out_file = File(f"{prefix}infer_{scene_basename}.png")
 
                 infer_args = [
@@ -748,7 +798,7 @@ class S2SegmentationWorkflow:
                         node_label=f"infer_{scene_basename}{suffix}")
                     .add_args(*infer_args)
                     .add_inputs(model_file, input_file, model_py_file,
-                                metadata_file)
+                                metadata_file, File("filter_image.py"))
                     .add_outputs(out_file, stage_out=True,
                                  register_replica=False)
                 )
@@ -764,28 +814,27 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-  # Stage 1 only — produces 2000x2000 merged masks, NOT 256x256 tiles
+  # CANONICAL PAPER REPRODUCTION — the defaults do everything: resize
+  # scenes to 2048x2048, auto-label (Fig 6), train BOTH the unfiltered
+  # and thin-cloud/shadow-filtered U-Nets (Table IV), stratified
+  # high/low-cloud evaluation (Table V, Fig 13), and whole-scene
+  # inference (Fig 9/14). Outputs are prefixed orig_/filtered_.
   %(prog)s --images data/s2_scenes/s2_vis_*.png
 
-  # Auto-label (recommended) — single DAG, no external data dirs needed.
-  # By DEFAULT trains BOTH an unfiltered and a thin-cloud/shadow-filtered
-  # U-Net (paper Table IV), sharing color-seg labels and the train/test
-  # split. Outputs are prefixed orig_/filtered_.
-  %(prog)s --images data/s2_scenes/s2_vis_*.png --auto-label
+  # Stage 1 color segmentation only (no training)
+  %(prog)s --images data/s2_scenes/s2_vis_*.png --no-auto-label
 
-  # Restrict to a single path if desired
-  %(prog)s --images data/s2_scenes/s2_vis_*.png --auto-label --paths filtered
+  # Restrict to a single training path / skip optional stages
+  %(prog)s --images data/s2_scenes/s2_vis_*.png --paths filtered
+  %(prog)s --images data/s2_scenes/s2_vis_*.png --no-infer --no-stratified-eval
 
-  # Both stages with pre-existing 256x256 mask tiles
-  %(prog)s --images data/s2_scenes/s2_vis_*.png \\
-      --train-images-dir data/train_images/ \\
-      --train-masks-dir data/train_masks/
+  # Variant scenarios (non-default, for comparison runs)
+  %(prog)s --images data/s2_scenes/s2_vis_*.png --filter-scale tile
+  %(prog)s --images data/s2_scenes/s2_vis_*.png --filtered-labels raw
+  %(prog)s --images data/s2_scenes/s2_vis_*.png --scene-size 0   # native 2000², padded
 
-  # Horovod training (with pre-existing masks)
-  %(prog)s --images data/s2_scenes/s2_vis_*.png \\
-      --train-images-dir data/train_images/ \\
-      --train-masks-dir data/train_masks/ \\
-      --training-mode horovod
+  # Horovod distributed training (paper Fig 12)
+  %(prog)s --images data/s2_scenes/s2_vis_*.png --training-mode horovod
 """,
     )
 
@@ -805,16 +854,31 @@ Examples:
     # Stage 1: Color segmentation
     parser.add_argument("--images", type=str, nargs="+", required=True,
                         help="Input Sentinel-2 PNG images")
-    parser.add_argument("--tile-size", type=int, default=250,
-                        help="Tile size in pixels (default: 250)")
+    parser.add_argument("--tile-size", type=int, default=256,
+                        help="Stage 1 color-segmentation tile size in pixels "
+                             "(default: 256, matching the paper; the legacy "
+                             "parallel demo used 250).")
     parser.add_argument("--original-size", type=int, default=2000,
-                        help="Original image dimension (default: 2000)")
+                        help="Native input scene dimension (default: 2000, "
+                             "the GEE export size). Only used when "
+                             "--scene-size 0 disables in-DAG resizing.")
+    parser.add_argument("--scene-size", type=int, default=2048,
+                        help="Resize every scene to this square size before "
+                             "any tiling (default: 2048, the paper's scene "
+                             "geometry — 2048/256 tiles evenly, so no edge "
+                             "padding ever enters the labels). Pass 0 to keep "
+                             "the native size; edge tiles are then padded.")
 
     # Stage 2: U-Net training (optional)
-    parser.add_argument("--auto-label", action="store_true",
+    parser.add_argument("--auto-label", action=argparse.BooleanOptionalAction,
+                        default=True,
                         help="Single-DAG auto-label mode: splits source scenes "
                              "into 256x256 grayscale training tiles and Stage 1 "
-                             "masks into matching tiles. No external data dirs needed.")
+                             "masks into matching tiles. No external data dirs "
+                             "needed. ON by default (the paper's pipeline); "
+                             "--no-auto-label restricts the DAG to Stage 1 "
+                             "color segmentation only (or external data via "
+                             "--train-images-dir/--train-masks-dir).")
     parser.add_argument("--paths", choices=["both", "orig", "filtered"],
                         default="both",
                         help="Which auto-label training path(s) to run "
@@ -828,7 +892,7 @@ Examples:
                         help="How the filtered path's LABELS are produced "
                              "(default: filtered). 'filtered' color-segments the "
                              "filtered tiles so input and label are self-"
-                             "consistent (reproduces the paper's ~99%). 'raw' "
+                             "consistent (reproduces the paper's ~99%%). 'raw' "
                              "reuses the raw-scene labels (filtered input vs "
                              "raw-derived target — the honest cross-comparison).")
     parser.add_argument("--train-images-dir", type=str, default=None,
@@ -851,22 +915,26 @@ Examples:
                         help="medianBlur kernel for background estimation. "
                              "Defaults: 155 at --filter-scale scene, 19 at "
                              "--filter-scale tile. Must be odd and >= 3.")
-    parser.add_argument("--stratified-eval", action="store_true",
+    parser.add_argument("--stratified-eval",
+                        action=argparse.BooleanOptionalAction, default=True,
                         help="Compute per-tile cloud/shadow fractions and "
                              "evaluate each trained branch separately on the "
                              "high-cloud (≥10%%) and low-cloud (<10%%) test "
                              "subsets, reproducing the paper's Table V split "
-                             "and the per-stratum panels of Fig 13.")
+                             "and the per-stratum panels of Fig 13. ON by "
+                             "default; --no-stratified-eval skips it.")
     parser.add_argument("--cloud-threshold", type=float, default=0.10,
                         help="Cloud-fraction cutoff between strata "
                              "(default: 0.10, matching the paper).")
-    parser.add_argument("--infer", action="store_true",
+    parser.add_argument("--infer", action=argparse.BooleanOptionalAction,
+                        default=True,
                         help="After training, run infer_unet on whole scenes "
                              "and emit colour-coded prediction PNGs "
-                             "({orig,filtered}_infer_<scene>.png). "
+                             "({orig,filtered}_infer_<scene>.png, paper Fig 9/14). "
                              "The filtered branch applies the same "
                              "only_shadow_cloud_removal filter to each scene "
-                             "before predicting.")
+                             "before predicting. ON by default; --no-infer "
+                             "skips it.")
     parser.add_argument("--infer-images", type=str, nargs="+", default=None,
                         help="Scenes to run inference on (default: same as "
                              "--images). Use this to predict on scenes that "

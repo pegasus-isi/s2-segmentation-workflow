@@ -207,7 +207,7 @@ def main():
     ap.add_argument("--prefix", default="",
                     help="Optional prefix for output filenames "
                          "(e.g. 'orig_' or 'filtered_').")
-    ap.add_argument("--class-names", default="Thick Ice,Thin Ice,Open Water",
+    ap.add_argument("--class-names", default="Thin Ice,Thick Ice,Open Water",
                     help="Comma-separated class labels (default: paper legend).")
     ap.add_argument("--batch-size", type=int, default=32)
     ap.add_argument("--dpi", type=int, default=150)

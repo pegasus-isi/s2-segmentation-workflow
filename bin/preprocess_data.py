@@ -195,9 +195,15 @@ def main():
     if cloud_lookup:
         # Align test-split cloud fractions in the same order as X_test.
         # Missing entries default to -1 so downstream code can filter them out
-        # (and so callers can spot the misalignment loudly).
+        # (and so callers can spot the misalignment loudly). NOTE: must use an
+        # explicit None check — a legitimate fraction of exactly 0.0 (a tile
+        # with no cloud/shadow) is falsy, so ``frac or -1.0`` would wrongly
+        # drop the cleanest tiles from stratified evaluation.
+        def _frac_or_missing(image_path):
+            f = _tile_cloud_fraction(image_path)
+            return -1.0 if f is None else f
         test_fracs = np.array(
-            [_tile_cloud_fraction(image_paths[i]) or -1.0 for i in test_idx],
+            [_frac_or_missing(image_paths[i]) for i in test_idx],
             dtype=np.float32,
         )
         missing = int((test_fracs < 0).sum())

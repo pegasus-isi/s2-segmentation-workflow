@@ -276,8 +276,10 @@ def main():
                         help="Number of prediction samples to visualize (default: 5)")
     parser.add_argument("--dpi", type=int, default=150,
                         help="Plot resolution (default: 150)")
-    parser.add_argument("--class-names", type=str, default="Ice,Thin Ice,Water",
-                        help="Comma-separated class names (default: 'Ice,Thin Ice,Water')")
+    parser.add_argument("--class-names", type=str, default="Thin Ice,Thick Ice,Open Water",
+                        help="Comma-separated class names in label-encoder order "
+                             "(sorted mask gray values 29=thin, 76=thick, 149=water; "
+                             "default: 'Thin Ice,Thick Ice,Open Water')")
     parser.add_argument("--prefix", type=str, default="",
                         help="Prefix prepended to every output filename "
                              "(e.g. 'orig_' / 'filtered_') to disambiguate "

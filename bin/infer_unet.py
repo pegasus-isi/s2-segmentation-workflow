@@ -113,17 +113,18 @@ def load_class_colors(metadata_path, override):
         return np.array(colors, dtype=np.uint8)
 
     # Encoder sees the grayscale values of red, blue, green written by
-    # color_segment.py. OpenCV's BGR-grayscale of those colours is:
-    #     red   (PNG 255,0,0) → 29
-    #     blue  (PNG   0,0,255) → 76
-    #     green (PNG   0,255,0) → 149
-    # LabelEncoder sorts these → 0=red, 1=blue, 2=green.
+    # color_segment.py. OpenCV grayscale (0.299R + 0.587G + 0.114B) of
+    # those colours is:
+    #     red   (255,0,0)  thick ice  → 76
+    #     blue  (0,0,255)  thin ice   → 29
+    #     green (0,255,0)  open water → 149
+    # LabelEncoder sorts these → 0=thin(blue), 1=thick(red), 2=water(green).
     gray_to_rgb = {
-        29:  (255, 0, 0),    # thick ice
-        76:  (0, 0, 255),    # thin ice
-        149: (0, 255, 0),    # open water
+        29:  (0, 0, 255),    # thin ice (blue)
+        76:  (255, 0, 0),    # thick ice (red)
+        149: (0, 255, 0),    # open water (green)
     }
-    default_legend = [(255, 0, 0), (0, 0, 255), (0, 255, 0)]
+    default_legend = [(0, 0, 255), (255, 0, 0), (0, 255, 0)]
 
     if metadata_path and os.path.exists(metadata_path):
         with open(metadata_path) as f:
@@ -139,7 +140,7 @@ def load_class_colors(metadata_path, override):
             return np.array(colors, dtype=np.uint8)
         logger.warning(f"{metadata_path} has no 'label_classes'; using default legend.")
 
-    logger.info("Using default class colours: 0=red (thick ice), 1=blue (thin ice), 2=green (open water).")
+    logger.info("Using default class colours: 0=blue (thin ice), 1=red (thick ice), 2=green (open water).")
     return np.array(default_legend, dtype=np.uint8)
 
 

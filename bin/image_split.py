@@ -32,8 +32,13 @@ def main():
     parser.add_argument("--grayscale", action="store_true",
                         help="Read image as grayscale (single channel)")
     parser.add_argument("--pad", action="store_true",
-                        help="Zero-pad edge tiles to full tile size "
+                        help="Pad edge tiles to full tile size "
                              "(use when image dims are not divisible by tile size)")
+    parser.add_argument("--pad-value", type=int, default=0,
+                        help="Pixel value used for --pad fill (default: 0). "
+                             "For mask tiles pass the open-water gray value "
+                             "(149) so padding does not become a phantom "
+                             "label class.")
     args = parser.parse_args()
 
     logger.info(f"Input: {args.input}")
@@ -58,12 +63,13 @@ def main():
             else:
                 tile = img[r:r + ts, c:c + ts, :]
 
-            # Pad undersized edge tiles to full tile_size with zeros
+            # Pad undersized edge tiles to full tile_size with pad_value
             if args.pad and (tile.shape[0] < ts or tile.shape[1] < ts):
                 if args.grayscale:
-                    padded = np.zeros((ts, ts), dtype=tile.dtype)
+                    padded = np.full((ts, ts), args.pad_value, dtype=tile.dtype)
                 else:
-                    padded = np.zeros((ts, ts, tile.shape[2]), dtype=tile.dtype)
+                    padded = np.full((ts, ts, tile.shape[2]), args.pad_value,
+                                     dtype=tile.dtype)
                 padded[:tile.shape[0], :tile.shape[1]] = tile
                 tile = padded
 

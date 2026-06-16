@@ -55,13 +55,15 @@ def test_workflow_generator_help():
 
 
 def test_stage1_only(stage1_inputs, tmp_path):
-    """Stage 1 only: should generate workflow.yml with split/segment/merge jobs."""
+    """Stage 1 only (--no-auto-label): split/segment/merge jobs, no Stage 2."""
     output = str(tmp_path / "workflow.yml")
     result = subprocess.run(
         [sys.executable, SCRIPT,
          "--images"] + stage1_inputs + [
          "--tile-size", "250",
          "--original-size", "500",
+         "--scene-size", "0",
+         "--no-auto-label",
          "--output", output,
          "--skip-sites-catalog"],
         capture_output=True, text=True,
@@ -87,6 +89,7 @@ def test_stage1_job_counts(stage1_inputs, tmp_path):
         [sys.executable, SCRIPT,
          "--images"] + stage1_inputs + [
          "--tile-size", "250", "--original-size", "500",
+         "--scene-size", "0", "--no-auto-label",
          "--output", output, "--skip-sites-catalog"],
         capture_output=True, text=True, check=True,
     )
@@ -113,6 +116,7 @@ def test_both_stages(stage1_inputs, stage2_inputs, tmp_path):
         [sys.executable, SCRIPT,
          "--images"] + stage1_inputs + [
          "--tile-size", "250", "--original-size", "500",
+         "--scene-size", "0", "--no-auto-label",
          "--train-images-dir", img_dir,
          "--train-masks-dir", mask_dir,
          "--epochs", "1",
@@ -169,6 +173,7 @@ def test_auto_label_mode(stage1_inputs, tmp_path):
         [sys.executable, SCRIPT,
          "--images"] + stage1_inputs + [
          "--tile-size", "250", "--original-size", "500",
+         "--scene-size", "0",
          "--auto-label",
          "--epochs", "1",
          "--output", output,
@@ -188,10 +193,12 @@ def test_auto_label_mode(stage1_inputs, tmp_path):
     assert len(split_img_jobs) == 2, f"Expected 2 split_images jobs, got {len(split_img_jobs)}"
     assert len(split_mask_jobs) == 2, f"Expected 2 split_masks jobs, got {len(split_mask_jobs)}"
 
-    # Should have preprocess, train, evaluate
-    assert "preprocess" in job_ids
-    assert "train" in job_ids
-    assert "evaluate" in job_ids
+    # Should have preprocess, train, evaluate for both branches
+    # (--paths both is the default; stage-2 ids carry the branch suffix)
+    for branch in ("orig", "filtered"):
+        assert f"preprocess_{branch}" in job_ids
+        assert f"train_{branch}" in job_ids
+        assert f"evaluate_{branch}" in job_ids
 
     # All job IDs should be unique
     assert len(job_ids) == len(set(job_ids)), \
