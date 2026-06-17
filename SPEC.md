@@ -4,10 +4,13 @@
 
 > See also: [`README.md`](README.md) for quick-start usage, project structure, and CLI reference.
 
-This document specifies a Pegasus WMS workflow for **Sentinel-2 satellite sea ice segmentation**, executed on an **HTCondor** pool. The workflow combines two existing pipelines into an end-to-end DAG:
+This document specifies a Pegasus WMS workflow for **Sentinel-2 satellite sea ice segmentation**, executed on an **HTCondor** pool. The workflow combines the pipelines into an end-to-end DAG. **The default flags reproduce the reference paper's configuration exactly** — running `workflow_generator.py` with no optional flags is the canonical paper reproduction (auto-label on, both training branches, scene-scale filter, stratified evaluation, and whole-scene inference all enabled by default).
 
-- **Stage 1 — Color Segmentation**: Split large Sentinel-2 images into tiles, apply HSV-based color segmentation in parallel to generate labeled training masks, then merge tiles back into full images.
-- **Stage 2 — U-Net Training & Evaluation**: Preprocess the labeled data, train a U-Net semantic segmentation model (3-class: ice, thin-ice, water), and evaluate it.
+- **Stage 0 — Scene normalization**: Resize each scene to 2048×2048 (`--scene-size`, default 2048) so it tiles evenly into 256×256 with no edge padding — matching the paper's scene geometry and avoiding a padding-induced phantom label class.
+- **Stage 1 — Color Segmentation**: Split scenes into tiles, apply HSV-based color segmentation in parallel to generate labeled training masks, then merge tiles back into full images.
+- **Stage 2 — U-Net Training & Evaluation**: Preprocess the labeled data, train a U-Net semantic segmentation model (3-class: thin-ice, thick-ice, open-water), evaluate it, run cloud-stratified evaluation, and apply the trained model to whole scenes.
+
+> **Class order.** Throughout, classes follow the LabelEncoder order = sorted mask gray values: **0 = thin ice** (blue, gray 29), **1 = thick ice** (red, gray 76), **2 = open water** (green, gray 149) — matching the paper's Fig 13 axes.
 
 ### Design Goals
 
@@ -21,21 +24,24 @@ s2-segmentation-workflow/
 ├── workflow_generator.py       # Pegasus DAG generator
 ├── bin/                        # Wrapper scripts (one per pipeline step)
 │   ├── model.py                # Shared U-Net model definition
-│   ├── image_split.py          # Stage 1: tile splitting
+│   ├── resize_image.py         # Stage 0: scene normalization to 2048×2048
+│   ├── image_split.py          # Stage 1: tile splitting (--pad / --pad-value)
 │   ├── color_segment.py        # Stage 1: HSV segmentation
 │   ├── image_merge.py          # Stage 1: tile reassembly (fan-in)
 │   ├── filter_image.py         # Auto-label: thin-cloud/shadow removal filter
-│   ├── compute_cloud_fraction.py  # Optional: per-tile cloud fractions (Table V)
+│   ├── compute_cloud_fraction.py  # Per-tile cloud fractions (Table V; --key-prefix)
 │   ├── preprocess_data.py      # Stage 2: data loading & encoding
 │   ├── train_unet.py           # Stage 2: U-Net training (3 modes)
 │   ├── evaluate_model.py       # Stage 2: model evaluation
-│   ├── evaluate_stratified.py  # Optional: cloud-stratified evaluation (Table V)
-│   ├── infer_unet.py           # Optional: whole-scene inference (Fig 9)
+│   ├── evaluate_stratified.py  # Cloud-stratified evaluation (Table V / Fig 13)
+│   ├── infer_unet.py           # Whole-scene inference (Fig 9 / Fig 14)
 │   ├── generate_plots.py       # Stage 2: publication figures & tables
-│   └── generate_speedup_plot.py  # Post-processing: Fig 12 speedup plots (not a DAG job)
+│   ├── generate_speedup_plot.py  # Post-processing: Fig 12 speedup plots (not a DAG job)
+│   ├── confusion_matrices.py   # Analysis helper: row-normalized 3×3 CMs (Fig 13)
+│   └── recover_cloud_fractions.py  # Analysis helper: rebuild stratified inputs post-run
 ├── Docker/
 │   └── S2_Dockerfile           # Container image definition
-├── tests/                      # pytest test suite (40 tests)
+├── tests/                      # pytest test suite (28 tests; 4 TF/Pegasus-gated)
 ├── download_data.py            # Sentinel-2 data download script (GEE)
 ├── prepare_and_run.sh          # Prepare local scenes and submit the workflow
 ├── run_manual.sh               # Bash-based local integration test
@@ -67,46 +73,60 @@ The original scripts this workflow was decomposed from live in the sibling
 
 ## 4. Pipeline Stages and Jobs
 
+### Stage 0: Scene Normalization
+
+#### Job 0 — `resize_image`
+
+- **Source**: `bin/resize_image.py` (new; no reference-code equivalent)
+- **Input**: One native Sentinel-2 PNG scene (e.g. 2000×2000 from the GEE export)
+- **Output**: `resized_{basename}.png` at `--scene-size`×`--scene-size` (default 2048×2048)
+- **Why**: 2048 divides evenly by 256, so downstream tiling produces full 256×256 tiles with **no edge padding** — matching the paper's scene geometry and preventing zero-padding from becoming a spurious 4th label class. Pass `--scene-size 0` to skip resizing (native size; edge tiles are then padded — masks with the open-water value, see Job 1).
+- **Parallelism**: One job per unique scene (including inference-only scenes). All run concurrently.
+- **HTCondor profile**: CPU-only, ~1 GB RAM.
+- **Dependencies**: None (entry point). Every downstream stage consumes the resized scene.
+
 ### Stage 1: Color Segmentation (Label Generation)
 
 #### Job 1 — `image_split`
 
 - **Source function**: `image_split()` in `parallel_segmentation.py`
-- **Input**: One 2000×2000 PNG image from `s2_par/s2_vis/`
-- **Output**: 64 tiles of 250×250 PNG (8×8 grid), named `{basename}_{row}_{col}.png`
+- **Input**: One resized 2048×2048 PNG scene (from Job 0)
+- **Output**: 64 tiles of 256×256 PNG (8×8 grid), named `{basename}_{row}_{col}.png`
 - **Parallelism**: One `image_split` job **per source image**. All N split jobs run **concurrently** on HTCondor — they have no inter-dependencies.
 - **HTCondor profile**: CPU-only, ~512 MB RAM, short runtime.
 - **Parameters**:
-  - `--input_image <path>` — path to the source image
-  - `--output_dir <path>` — directory for output tiles
-  - `--tile_size 250` — tile dimension (default 250)
-- **Dependencies**: None (entry point)
+  - `--input <path>` — path to the (resized) scene
+  - `--output-prefix <prefix>` — tile name prefix
+  - `--tile-size 256` — tile dimension (default 256)
+  - `--grayscale` — read as single channel (training-image/mask tiles)
+  - `--pad` / `--pad-value <v>` — pad undersized edge tiles to full size with value `v` (used only with `--scene-size 0`; mask splits pass `--pad-value 149` = open water so padding never becomes a phantom class)
+- **Dependencies**: `resize_image` (or none, with `--scene-size 0`)
 
 #### Job 2 — `color_segment`
 
 - **Source function**: `color_segmentation()` + `col_seg()` in `parallel_segmentation.py`
-- **Input**: One 250×250 tile PNG
-- **Output**: One 250×250 segmented tile PNG (ice=red, thin-ice=blue, water=green)
+- **Input**: One 256×256 tile PNG
+- **Output**: One 256×256 segmented tile PNG (thick-ice=red, thin-ice=blue, open-water=green)
 - **Parallelism**: One job **per tile** — this is the embarrassingly parallel stage. For N source images, there are **N×64 independent segment jobs** all eligible to run concurrently on HTCondor. This is the primary parallelism exploit — the original code used `multiprocessing.Pool` on a single machine; HTCondor distributes these across the entire cluster.
 - **HTCondor profile**: CPU-only, ~256 MB RAM, very short runtime (~seconds per tile).
 - **Parameters**:
-  - `--input_tile <path>` — input tile path
-  - `--output_tile <path>` — output segmented tile path
-- **Logic**: Convert RGB→HSV, apply three threshold ranges (ice/thin-ice/water), color-mask the output.
+  - `--input <path>` — input tile path
+  - `--output <path>` — output segmented tile path
+- **Logic**: Convert RGB→HSV, apply three threshold ranges (thick-ice/thin-ice/open-water), color-mask the output.
 - **Dependencies**: Depends on the corresponding `image_split` job that produced its input tile.
 
 #### Job 3 — `image_merge`
 
 - **Source function**: `image_merge()` in `parallel_segmentation.py`
 - **Input**: All 64 segmented tiles for one source image
-- **Output**: One 2000×2000 reassembled segmentation mask PNG in `s2_par/s2_seg/`
+- **Output**: One 2048×2048 reassembled segmentation mask PNG (`{basename}_seg.png`)
 - **Parallelism**: One merge job **per source image** (fan-in). All N merge jobs are independent and run **concurrently** once their respective tile dependencies are met.
 - **HTCondor profile**: CPU-only, ~1 GB RAM (loads 64 tiles into memory).
 - **Parameters**:
-  - `--input_dir <path>` — directory containing the 64 segmented tiles for this image
-  - `--output_image <path>` — path for the merged output
-  - `--tile_size 250`
-  - `--original_size 2000`
+  - `--input <tile>` (repeated) — the 64 segmented tiles for this image
+  - `--output <path>` — path for the merged output
+  - `--tile-size 256`
+  - `--original-size 2048` (the resized scene size)
 - **Dependencies**: All 64 `color_segment` jobs for this source image must complete.
 
 ### Auto-label Bridge (with `--auto-label`)
@@ -114,8 +134,8 @@ The original scripts this workflow was decomposed from live in the sibling
 #### Job 3b — `split_images` (auto-label mode only)
 
 - **Source**: `image_split.py` (same script as Job 1, invoked with `--grayscale --pad --tile-size 256`)
-- **When**: Only present when `--auto-label` is passed to the workflow generator.
-- **Input**: One 2000×2000 source scene PNG (same input as Job 1)
+- **When**: Active by default (auto-label mode); disabled with `--no-auto-label`.
+- **Input**: One resized 2048×2048 scene PNG (same input as Job 1)
 - **Output**: 256×256 grayscale tile PNGs, named `train_img_{basename}_{row}_{col}.png`
 - **Parallelism**: One job per source image, all run concurrently. Runs in parallel with Stage 1 (no dependency on segmentation).
 - **HTCondor profile**: CPU-only, ~512 MB RAM.
@@ -130,8 +150,8 @@ The original scripts this workflow was decomposed from live in the sibling
 #### Job 3c — `split_masks` (auto-label mode only)
 
 - **Source**: `image_split.py` (same script as Job 1, invoked with `--grayscale --pad --tile-size 256`)
-- **When**: Only present when `--auto-label` is passed to the workflow generator.
-- **Input**: One 2000×2000 merged segmentation mask PNG from `image_merge`
+- **When**: Active by default (auto-label mode); disabled with `--no-auto-label`.
+- **Input**: One 2048×2048 merged segmentation mask PNG from `image_merge`
 - **Output**: 256×256 grayscale tile PNGs, named `train_mask_{basename}_seg_{row}_{col}.png`
 - **Parallelism**: One job per source image, all run concurrently.
 - **HTCondor profile**: CPU-only, ~512 MB RAM.
@@ -140,10 +160,10 @@ The original scripts this workflow was decomposed from live in the sibling
   - `--output-prefix train_mask_{basename}_seg`
   - `--tile-size 256`
   - `--grayscale`
-  - `--pad`
+  - `--pad --pad-value 149` (open-water value, so any padding is absorbed into the water class rather than a phantom 4th class)
 - **Dependencies**: `image_merge` for the same source image.
 
-> **Tile count matching**: Both `split_images` and `split_masks` use `--pad` to zero-pad edge tiles to full 256×256 when the image dimension (2000) is not evenly divisible by 256. This guarantees both produce exactly `ceil(2000/256)^2 = 64` tiles per scene, so image and mask counts always match for `preprocess_data`.
+> **Tile count matching**: At the default `--scene-size 2048`, scenes divide evenly into 8×8 = **64 tiles** with **no padding** — `--pad` is a no-op. With `--scene-size 0` (native 2000²), `--pad` fills the edge tiles (masks at value 149) so both `split_images` and `split_masks` still produce exactly 64 tiles per scene and image/mask counts match for `preprocess_data`. The padding-as-phantom-class bug this avoids is documented in `comparison_report.html` §8.
 
 #### Job 3d — `filter_image` (auto-label mode, filtered path)
 
@@ -354,7 +374,7 @@ Job IDs and output filenames are suffixed accordingly (e.g. `train_orig`, `train
 
 **Parallelism in the DAG:**
 - **Stage 1**: All N `image_split` jobs launch concurrently (no dependencies between images). As each completes, its 64 `color_segment` children launch immediately — yielding up to **N×64 concurrent HTCondor jobs**. Each image's `image_merge` waits only for its own 64 segments (not other images), so merges also overlap.
-- **Auto-label bridge**: When `--auto-label` is set, two additional job types run per source image: `split_images` tiles the original scene into 256×256 grayscale training images (runs immediately, no dependency on segmentation), and `split_masks` tiles the merged mask into matching 256×256 grayscale labels (depends on `image_merge`). Both use `--pad` to zero-pad edge tiles, guaranteeing equal tile counts. All split jobs run concurrently. The resulting tiles are wired as `--image` and `--mask` inputs to `preprocess_data`.
+- **Auto-label bridge**: In the default auto-label mode (disable with `--no-auto-label`), two additional job types run per source image: `split_images` tiles the resized scene into 256×256 grayscale training images (runs immediately, no dependency on segmentation), and `split_masks` tiles the merged mask into matching 256×256 grayscale labels (depends on `image_merge`). At `--scene-size 2048` the tiles divide evenly with no padding; at `--scene-size 0`, `--pad` fills edges (masks at value 149) so tile counts still match. All split jobs run concurrently. The resulting tiles are wired as `--image` and `--mask` inputs to `preprocess_data`.
 - **Stage 2**: Sequential (preprocess → train → evaluate → generate_plots), but `train_unet` can use intra-job parallelism via multi-GPU MirroredStrategy or multi-node Horovod.
 - The connection between stages is optional: if pre-labeled training data already exists, Stage 2 can run independently without `--auto-label` by providing `--train-images-dir` and `--train-masks-dir`.
 
@@ -372,8 +392,13 @@ The input data is **Sentinel-2 optical imagery** from ESA's Copernicus program, 
 | Time period | November 2019 (Antarctic summer) |
 | Bands | B4 (red), B3 (green), B2 (blue) |
 | Resolution | 10m per pixel |
-| Scenes | 66 large scenes |
-| Training tiles | 4,224 images of 256×256 pixels |
+| Scenes | 66 in the paper text; **63 in practice** (see note) |
+| Training tiles | 4,224 (paper) / **4,032 in practice** of 256×256 pixels |
+
+> **Dataset-size note:** the paper text states 66 scenes / 4,224 tiles, but the authors'
+> reference scripts load `train_images_4032/` — i.e. **63 scenes / 4,032 tiles** — which is
+> also what our GEE export yields (`s2_vis_56/57/64` are absent). This workflow reproduces
+> the reference-code dataset (63/4032). GEE exports are 2000×2000; Stage 0 resizes to 2048².
 
 > Iqrah et al., *"A Parallel Workflow for Polar Sea-Ice Classification using Auto-Labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024. DOI: [10.1109/IPDPSW63119.2024.00172](https://doi.org/10.1109/IPDPSW63119.2024.00172)
 
@@ -401,12 +426,13 @@ Training masks are **not downloaded** — they are produced by Stage 1 (color se
 
 | Logical Name | Type | Format | Typical Size |
 |---|---|---|---|
-| `s2_vis_{id}.png` | Input | RGB PNG | 2000×2000, ~150 KB |
-| `s2_vis_{id}_{row}_{col}.png` | Intermediate | RGB PNG tile | 250×250, ~3 KB |
-| `s2_seg_{id}_{row}_{col}.png` | Intermediate | RGB PNG tile | 250×250, ~3 KB |
-| `s2_seg_{id}.png` | Output | RGB PNG | 2000×2000, ~200 KB |
-| `train_img_{id}_{row}_{col}.png` | Intermediate | Grayscale PNG (auto-label) | 256×256, zero-padded |
-| `train_mask_{id}_seg_{row}_{col}.png` | Intermediate | Grayscale PNG (auto-label) | 256×256, zero-padded |
+| `s2_vis_{id}.png` | Input | RGB PNG | native (e.g. 2000×2000), ~150 KB |
+| `resized_{id}.png` | Intermediate | RGB PNG (Stage 0) | 2048×2048 |
+| `s2_vis_{id}_{row}_{col}.png` | Intermediate | RGB PNG tile | 256×256, ~3 KB |
+| `s2_seg_{id}_{row}_{col}.png` | Intermediate | RGB PNG tile | 256×256, ~3 KB |
+| `s2_seg_{id}.png` | Output | RGB PNG | 2048×2048, ~200 KB |
+| `train_img_{id}_{row}_{col}.png` | Intermediate | Grayscale PNG (auto-label) | 256×256 (no padding at 2048) |
+| `train_mask_{id}_seg_{row}_{col}.png` | Intermediate | Grayscale PNG (auto-label) | 256×256 (pad value 149 if `--scene-size 0`) |
 | `train_images_dir/*.png` | Input | Grayscale PNG (non-auto-label) | 256×256 |
 | `train_masks_dir/*.png` | Input | Grayscale PNG (non-auto-label) | 256×256 |
 | `X_train.npy` / `X_test.npy` | Intermediate | NumPy array | Varies with dataset |
@@ -418,13 +444,13 @@ Training masks are **not downloaded** — they are produced by Stage 1 (color se
 | `prediction_samples.png` | Output | PNG plot | ~500 KB |
 | `metrics_table.png` | Output | PNG plot | ~50 KB |
 | `per_class_metrics.json` | Output | JSON | <1 KB |
-| `filtered_{id}.png` | Intermediate | Filtered grayscale scene (scene-scale filter) | 2000×2000 |
+| `filtered_{id}.png` | Output | Filtered scene (scene-scale filter only) | 2048×2048 |
 | `train_imgf_{id}_{row}_{col}.png` | Intermediate | Filtered training tile | 256×256 |
 | `cloud_fraction_{id}.json` | Intermediate | Per-tile cloud fractions (`--stratified-eval`) | <5 KB |
 | `test_cloud_fractions{_branch}.npy` | Intermediate | Cloud fractions for the test split | small |
 | `{branch}stratified_summary.json` + per-stratum JSON/PNG | Output | Stratified evaluation (Table V, Fig 13) | <1 MB |
 | `training_history{_branch}.json` | Output | Per-epoch metrics + timing (feeds Fig 12 plots) | <50 KB |
-| `{branch}infer_{id}.png` | Output | Whole-scene prediction (`--infer`, Fig 9) | 2000×2000 RGB |
+| `{branch}_infer_{id}.png` | Output | Whole-scene prediction (`--infer`, Fig 9/14) | scene-sized RGB |
 
 With `--paths both` (default), Stage 2 logical names carry a branch suffix/prefix (`model_orig.hdf5` / `model_filtered.hdf5`, `evaluation_results_{orig,filtered}.json`, `filtered_*.png` plots), as described in Section 4.
 
@@ -513,6 +539,7 @@ All jobs for one source image share a `label=<basename>` Pegasus profile, enabli
 
 | Level | What runs in parallel | Managed by | Max concurrent jobs |
 |---|---|---|---|
+| **Scene-normalize** | All N `resize_image` jobs (Stage 0) | HTCondor DAGMan | N |
 | **Image-level** | All N `image_split` jobs | HTCondor DAGMan | N |
 | **Tile-level** | All N×64 `color_segment` jobs | HTCondor DAGMan | N×64 (limited by pool slots) |
 | **Merge-level** | All N `image_merge` jobs (independent per image) | HTCondor DAGMan | N |
@@ -528,21 +555,22 @@ All parameters are flags of `workflow_generator.py`:
 | Parameter | Default | Description |
 |---|---|---|
 | `--images` | (required) | Input Sentinel-2 PNG scenes |
-| `--tile-size` | 250 | Tile dimension for splitting |
-| `--original-size` | 2000 | Original image dimension |
-| `--n-classes` | 3 | Segmentation classes (ice, thin-ice, water) |
+| `--scene-size` | 2048 | In-DAG resize target (Stage 0); `0` keeps native size (edge tiles padded) |
+| `--tile-size` | 256 | Tile dimension for splitting (paper's value; legacy demo used 250) |
+| `--original-size` | 2000 | Native scene dimension; only used with `--scene-size 0` |
+| `--n-classes` | 3 | Segmentation classes (thin-ice, thick-ice, open-water) |
 | `--test-size` | 0.20 | Train/test split ratio |
 | `--epochs` | 50 | Training epochs |
 | `--batch-size` | 32 | Training batch size |
-| `--random-state` | 0 | Random seed for reproducibility |
-| `--auto-label` | off | Single-DAG auto-label mode (Stage 1 output feeds Stage 2) |
+| `--random-state` | 0 | Random seed for the train/test split (training itself is unseeded) |
+| `--auto-label` / `--no-auto-label` | **on** | Single-DAG auto-label mode (Stage 1 output feeds Stage 2) |
 | `--paths` | both | Auto-label training paths: `both` (paper Table IV), `orig`, or `filtered` |
 | `--filtered-labels` | filtered | Filtered branch's label source: `filtered` (self-consistent, paper ~99%) or `raw` (filtered input vs raw labels, ~90%) |
-| `--filter-scale` | scene | Apply the cloud/shadow filter per whole scene or per 256×256 tile |
+| `--filter-scale` | scene | Apply the cloud/shadow filter per whole scene (paper config) or per 256×256 tile |
 | `--filter-kernel-size` | auto | medianBlur kernel; defaults to 155 at scene scale, 19 at tile scale |
-| `--stratified-eval` | off | Add cloud-fraction computation + stratified evaluation jobs (Table V) |
+| `--stratified-eval` / `--no-stratified-eval` | **on** | Cloud-fraction computation + stratified evaluation jobs (Table V / Fig 13) |
 | `--cloud-threshold` | 0.10 | Cloud-fraction cutoff between high/low strata |
-| `--infer` | off | Add whole-scene inference jobs after training (Fig 9) |
+| `--infer` / `--no-infer` | **on** | Whole-scene inference jobs after training (Fig 9 / Fig 14) |
 | `--infer-images` | `--images` | Scenes to run inference on |
 | `--training-mode` | single-gpu | `single-gpu`, `mirrored`, or `horovod` |
 | `--train-images-dir` / `--train-masks-dir` | none | Pre-existing 256×256 training data (non-auto-label mode) |
@@ -595,7 +623,7 @@ bash run_manual.sh
 
 ### Test Structure
 
-The suite contains **40 tests** across 9 modules. All tests use **synthetic data** generated via pytest fixtures (no real Sentinel-2 imagery required). Fixtures are defined in `tests/conftest.py`. Modules that need heavyweight dependencies guard themselves with `pytest.importorskip` — the TensorFlow-based modules (`test_model`, `test_preprocess_data`, `test_train_unet`, `test_evaluate_model`) skip when TensorFlow is absent, and `test_workflow_generator` skips when `Pegasus.api` is absent, so the Stage 1 tests always run.
+The suite contains **28 tests** across 9 modules (24 run without heavyweight deps; 4 TF/Pegasus-gated tests skip when those are absent). All tests use **synthetic data** generated via pytest fixtures (no real Sentinel-2 imagery required). Fixtures are defined in `tests/conftest.py`. Modules that need heavyweight dependencies guard themselves with `pytest.importorskip` — the TensorFlow-based modules (`test_model`, `test_preprocess_data`, `test_train_unet`, `test_evaluate_model`) skip when TensorFlow is absent, and `test_workflow_generator` skips when `Pegasus.api` is absent, so the Stage 1 tests always run.
 
 | Test File | What It Tests | Synthetic Data |
 |---|---|---|
@@ -645,4 +673,4 @@ A change is exercised at four escalating levels before a full-scale submission:
 1. **Unit tests** — `pytest tests/` on synthetic fixtures (seconds; no GPU, no Pegasus required for Stage 1 tests).
 2. **Local integration** — `run_manual.sh` runs the 7 core pipeline steps sequentially with tiny parameters (minutes, single machine).
 3. **Small DAG** — a 2-scene `--auto-label` submission (128 segment jobs + training) on the HTCondor pool to validate planning, staging, and container execution.
-4. **Full reproduction** — 66 scenes / 4,224 training tiles via Runs A/B/C.
+4. **Full reproduction** — 63 scenes / 4,032 training tiles via Runs A/B/C.

@@ -1,7 +1,10 @@
 # Gap Analysis — Workflow vs. Paper vs. Reference Code
 
-**Date:** 2026-06-08
+**Date:** 2026-06-08 (updated 2026-06-17)
 **Workflow:** `s2-segmentation-workflow/`
+**Latest results:** see `comparison_report.md` / `comparison_report.html` for the consolidated
+Run A (scene filter) vs Run B (tile filter) vs paper comparison, including full Fig 13 confusion
+matrices and the variance-vs-filter-scale analysis.
 **Paper:** Iqrah, Wang, Xie, Prasad — *"A Parallel Workflow for Polar Sea-Ice Classification
 using Auto-labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024.
 **Reference code:** `../S2_Parallel_Workflow/` (`parallel_segmentation.py`,
@@ -111,11 +114,11 @@ These gaps block full reproducibility of the paper's claims.
 
 - **Paper:** 66 scenes / 4,224 tiles.
 - **Our workflow:** 63 scenes / 4,032 tiles — missing
-  `s2_vis_56/57/64.png`. There is no assertion that exactly 66 are present
-  and no documentation of the missing three.
-- **Effort to add:** **Small.** A log line + soft warning in
-  `preprocess_data.py`; recover the missing scenes from GEE
-  (`download_data.py`).
+  `s2_vis_56/57/64.png`. Now **documented** in README and SPEC §6: the
+  reference scripts themselves load `train_images_4032/` (63 scenes), so 63/4032
+  matches the reference code even though the paper text says 66/4224.
+- **Effort to close fully:** **Small.** Recover the missing three scenes from GEE
+  (`download_data.py`) if exact paper-text parity is required.
 
 ### 2.4 Filter applied at full-scene scale, not per tile — ✅ resolved
 

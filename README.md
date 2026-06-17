@@ -86,7 +86,9 @@ s2-segmentation-workflow/
 │   ├── evaluate_model.py       # Stage 2: model evaluation
 │   ├── evaluate_stratified.py  # High/low-cloud stratified eval (Table V, Fig 13)
 │   ├── infer_unet.py           # Whole-scene inference (Fig 9/14)
-│   └── generate_plots.py       # Stage 2: publication figures & tables
+│   ├── generate_plots.py       # Stage 2: publication figures & tables
+│   ├── confusion_matrices.py   # Analysis: row-normalized 3×3 confusion matrices (Fig 13)
+│   └── recover_cloud_fractions.py  # Analysis: rebuild stratified inputs post-run
 ├── Docker/
 │   └── S2_Dockerfile           # Container image definition
 ├── tests/                      # pytest test suite
@@ -285,9 +287,10 @@ pegasus-plan --submit -s condorpool -o local workflow.yml
 **Stage 1 only (no training):**
 
 ```bash
-# Color segmentation only — produces one 2000×2000 merged mask per
-# input image (e.g. s2_vis_00_seg.png). Does NOT produce 256×256
-# training tiles; the default auto-label mode does that.
+# Color segmentation only — produces one 2048×2048 merged mask per
+# input image (e.g. s2_vis_00_seg.png; scenes are resized to 2048 by
+# default — pass --scene-size 0 to keep native size). Does NOT produce
+# 256×256 training tiles; the default auto-label mode does that.
 python workflow_generator.py \
     --images data/s2_scenes/s2_vis_*.png \
     --output workflow.yml
