@@ -219,8 +219,10 @@ off-diagonals to ~0 after filtering; Run B's filtered branch does not. See §1A.
 <tr><td><b>Table III / Fig 12 — Horovod training scaling (7.21× @ 8 GPU)</b></td><td class="bad">Not run</td><td>Needs a 1/2/4/6/8-GPU sweep on a DGX-class node (Run C); our runs used single-GPU training.</td></tr>
 <tr><td><b>Dataset size (66 scenes / 4224 tiles)</b></td><td class="warn">Differs</td><td>We use 63 scenes / 4032 tiles — matches the reference code's <code>train_images_4032/</code>; <code>s2_vis_56/57/64</code> absent from our GEE export.</td></tr>
 </table>
-<p>The regenerable markdown twin of this whole section is <code>comparison_report.md</code> §0
-(produced by <code>compare_with_paper.py --run-dir-b</code>).</p>
+<p>See <a href="gap_analysis.md"><code>gap_analysis.md</code></a> for the full audit of the
+not-compared items (U-Net-Man baseline, SSIM, Spark/multiprocessing speedups) — paper claim by
+claim, with effort estimates. The regenerable markdown twin of this whole section is
+<code>comparison_report.md</code> §0 (produced by <code>compare_with_paper.py --run-dir-b</code>).</p>
 
 <h3 id="interp">1A.6 Interpreting Run A vs Run B — variance vs. filter scale</h3>
 <ul>

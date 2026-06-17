@@ -446,6 +446,10 @@ def render_comprehensive(run_a: dict, run_b: dict,
     A("| **Table III / Fig 12 — Horovod training scaling (7.21× @ 8 GPU)** | ❌ Not run | Needs a 1/2/4/6/8-GPU sweep on a DGX-class node (Run C); our runs used single-GPU training. |")
     A("| **Dataset size (66 scenes / 4224 tiles)** | ⚠️ Differs | We use 63 scenes / 4032 tiles — matches the reference code's `train_images_4032/`; `s2_vis_56/57/64` are absent from our GEE export. |")
     A("")
+    A("See [`gap_analysis.md`](gap_analysis.md) for the full audit of these "
+      "not-compared items (U-Net-Man baseline, SSIM, Spark/multiprocessing "
+      "speedups) — paper claim by claim, with effort estimates.")
+    A("")
 
     # 0.6 Interpreting the A-vs-B differences
     A("### 0.6 Interpreting Run A vs Run B (variance vs. filter scale)")
