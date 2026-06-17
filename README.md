@@ -553,3 +553,13 @@ side-by-side images and the headline-metric delta table.
 | Spark / Map-Reduce auto-labeling speedup (Table II, Fig 10) | ❌ §1.3 — HTCondor parallelism substitutes |
 
 See `gap_analysis.md` for the full audit of paper / reference-code / workflow coverage.
+
+## License
+
+This project is licensed under the **Apache License, Version 2.0** — see the
+[`LICENSE`](LICENSE) file for the full text.
+
+```
+Copyright 2026 University of Southern California / The Pegasus Project
+Licensed under the Apache License, Version 2.0.
+```
