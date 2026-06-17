@@ -144,14 +144,19 @@ These gaps block full reproducibility of the paper's claims.
 
 ## 3. Low priority
 
-### 3.1 No Spark scaling benchmarks (paper Tables I/II, Fig 10)
+### 3.1 No auto-labeling parallel-speedup benchmarks (paper Table I, Fig 10)
 
-- **Paper:** Reports parallel-execution speedup figures (Fig 10) and
-  scalability on the GCD cluster (Table II).
-- **Our workflow:** We rely on Pegasus's own statistics (`pegasus-statistics`)
-  but don't produce paper-style speedup plots.
-- **Effort to add:** **Small.** A `bin/generate_speedup_plot.py` consuming
-  `pegasus-statistics` output.
+- **Paper:** Table I / Fig 10 report the **multiprocessing** speedup of the
+  color-segmentation auto-labeling step (4.5× at 8 processes on one machine);
+  Table II reports the PySpark variant (see §1.3).
+- **Our workflow:** Auto-labeling is parallelised by HTCondor (one job per
+  tile), not Python `multiprocessing`, so these single-machine speedup numbers
+  are not reproduced. We rely on `pegasus-statistics` for runtime accounting.
+- **Note:** `bin/generate_speedup_plot.py` already exists, but it covers the
+  **distributed-training** speedup (Fig 12, §3.2) — it aggregates per-epoch
+  `training_history` files, *not* the auto-labeling multiprocessing speedup.
+- **Effort to add:** **Small, low ROI.** Time the multiprocessing path from
+  `parallel_segmentation.py` at varying worker counts; not a Pegasus-DAG concern.
 
 ### 3.2 No reporting of training-throughput per epoch (paper Fig 12) — ✅ resolved
 
