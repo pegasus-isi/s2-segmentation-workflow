@@ -78,7 +78,7 @@ The original scripts this workflow was decomposed from live in the sibling
 #### Job 0 — `resize_image`
 
 - **Source**: `bin/resize_image.py` (new; no reference-code equivalent)
-- **Input**: One native Sentinel-2 PNG scene (e.g. 2000×2000 from the GEE export)
+- **Input**: One native Sentinel-2 PNG scene (2048×2048 as supplied by the authors; 2000×2000 from a raw GEE export)
 - **Output**: `resized_{basename}.png` at `--scene-size`×`--scene-size` (default 2048×2048)
 - **Why**: 2048 divides evenly by 256, so downstream tiling produces full 256×256 tiles with **no edge padding** — matching the paper's scene geometry and preventing zero-padding from becoming a spurious 4th label class. Pass `--scene-size 0` to skip resizing (native size; edge tiles are then padded — masks with the open-water value, see Job 1).
 - **Parallelism**: One job per unique scene (including inference-only scenes). All run concurrently.
@@ -163,7 +163,7 @@ The original scripts this workflow was decomposed from live in the sibling
   - `--pad --pad-value 149` (open-water value, so any padding is absorbed into the water class rather than a phantom 4th class)
 - **Dependencies**: `image_merge` for the same source image.
 
-> **Tile count matching**: At the default `--scene-size 2048`, scenes divide evenly into 8×8 = **64 tiles** with **no padding** — `--pad` is a no-op. With `--scene-size 0` (native 2000²), `--pad` fills the edge tiles (masks at value 149) so both `split_images` and `split_masks` still produce exactly 64 tiles per scene and image/mask counts match for `preprocess_data`. The padding-as-phantom-class bug this avoids is documented in `comparison_report.html` §8.
+> **Tile count matching**: At the default `--scene-size 2048`, scenes divide evenly into 8×8 = **64 tiles** with **no padding** — `--pad` is a no-op. With `--scene-size 0` (native 2000²), `--pad` fills the edge tiles (masks at value 149) so both `split_images` and `split_masks` still produce exactly 64 tiles per scene and image/mask counts match for `preprocess_data`. The padding-as-phantom-class bug this avoids is documented in `comparison_report.html` §7.
 
 #### Job 3d — `filter_image` (auto-label mode, filtered path)
 
@@ -392,13 +392,19 @@ The input data is **Sentinel-2 optical imagery** from ESA's Copernicus program, 
 | Time period | November 2019 (Antarctic summer) |
 | Bands | B4 (red), B3 (green), B2 (blue) |
 | Resolution | 10m per pixel |
-| Scenes | 66 in the paper text; **63 in practice** (see note) |
-| Training tiles | 4,224 (paper) / **4,032 in practice** of 256×256 pixels |
+| Scenes | 66 (`s2_vis_00..65.png`, 2048×2048 native) |
+| Training tiles | 4,224 of 256×256 pixels (66 × 64) |
 
-> **Dataset-size note:** the paper text states 66 scenes / 4,224 tiles, but the authors'
-> reference scripts load `train_images_4032/` — i.e. **63 scenes / 4,032 tiles** — which is
-> also what our GEE export yields (`s2_vis_56/57/64` are absent). This workflow reproduces
-> the reference-code dataset (63/4032). GEE exports are 2000×2000; Stage 0 resizes to 2048².
+> **Dataset provenance:** the authors supplied the source scenes directly — 66 PNGs,
+> natively 2048×2048, which tile evenly into the paper's 4,224 × 256² training tiles.
+> The workflow reproduces the paper's full dataset. Consume them as-is with
+> `--scene-size 0 --original-size 2048`; Stage 0's `--scene-size 2048` default exists
+> only to normalize GEE exports, which come out 2000×2000 and would otherwise pad
+> edge tiles.
+>
+> The authors also supplied a pre-tiled set (`train_images_4032/`, `train_masks_4032/`)
+> covering 63 of the 66 scenes — `s2_vis_56/57/64` were never tiled. It is a
+> label-validation reference, not the training input.
 
 > Iqrah et al., *"A Parallel Workflow for Polar Sea-Ice Classification using Auto-Labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024. DOI: [10.1109/IPDPSW63119.2024.00172](https://doi.org/10.1109/IPDPSW63119.2024.00172)
 
@@ -426,7 +432,7 @@ Training masks are **not downloaded** — they are produced by Stage 1 (color se
 
 | Logical Name | Type | Format | Typical Size |
 |---|---|---|---|
-| `s2_vis_{id}.png` | Input | RGB PNG | native (e.g. 2000×2000), ~150 KB |
+| `s2_vis_{id}.png` | Input | RGB PNG | native (2048×2048 as supplied; 2000×2000 from GEE), ~150 KB |
 | `resized_{id}.png` | Intermediate | RGB PNG (Stage 0) | 2048×2048 |
 | `s2_vis_{id}_{row}_{col}.png` | Intermediate | RGB PNG tile | 256×256, ~3 KB |
 | `s2_seg_{id}_{row}_{col}.png` | Intermediate | RGB PNG tile | 256×256, ~3 KB |
@@ -673,4 +679,4 @@ A change is exercised at four escalating levels before a full-scale submission:
 1. **Unit tests** — `pytest tests/` on synthetic fixtures (seconds; no GPU, no Pegasus required for Stage 1 tests).
 2. **Local integration** — `run_manual.sh` runs the 7 core pipeline steps sequentially with tiny parameters (minutes, single machine).
 3. **Small DAG** — a 2-scene `--auto-label` submission (128 segment jobs + training) on the HTCondor pool to validate planning, staging, and container execution.
-4. **Full reproduction** — 63 scenes / 4,032 training tiles via Runs A/B/C.
+4. **Full reproduction** — 66 scenes / 4,224 training tiles via Runs A/B/C.

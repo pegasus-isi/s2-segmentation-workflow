@@ -140,44 +140,131 @@ The workflow uses **Sentinel-2 optical imagery** from ESA's Copernicus program, 
 | Scenes | 66 large scenes (2048×2048) |
 | Training tiles | 4,224 images of 256×256 pixels |
 
-> **Dataset-size note**: the paper's text says 66 scenes / 4,224 tiles, but the authors'
-> reference training scripts load `train_images_4032/` — i.e. **63 scenes / 4,032 tiles**,
-> matching the 63 scenes our GEE download yields (`s2_vis_56/57/64` are absent). The
-> workflow reproduces the reference-code dataset. GEE exports come out 2000×2000; the
-> workflow's default `--scene-size 2048` restores the paper's scene geometry in-DAG.
+> **Dataset provenance**: the authors supplied the source data directly — 66 scenes
+> as `s2_vis_00..65.png`, natively **2048×2048** (they divide evenly by 256, giving the
+> paper's 66 × 64 = **4,224** tiles). The workflow reproduces the paper's full dataset.
+> Pass `--scene-size 0 --original-size 2048` to consume those scenes as-is; the
+> `--scene-size 2048` default exists only to normalize GEE exports, which come out
+> 2000×2000 and would otherwise yield padded edge tiles.
+>
+> The authors' own tiled training set (`train_images_4032/`, `train_masks_4032/`)
+> covers 63 of the 66 scenes — `s2_vis_56/57/64` were never tiled. That set is useful
+> as a **label-validation reference**, not as the training input: this workflow
+> auto-labels all 66 scenes itself, as the paper describes.
 
 > Source: Iqrah et al., *"A Parallel Workflow for Polar Sea-Ice Classification using Auto-Labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024. DOI: [10.1109/IPDPSW63119.2024.00172](https://doi.org/10.1109/IPDPSW63119.2024.00172)
 
-### Downloading the Data
+### Getting the Dataset
 
-A download script is provided that uses the Google Earth Engine Python API:
+**Option 1 — the published archive (recommended).** This is the exact data the paper
+was produced from, so it reproduces the results bit-for-bit. One command stages it:
 
 ```bash
-# 1. Install the GEE API
+S2_DATA_URL=<base-url-of-the-published-record> ./prepare_author_data.sh
+```
+
+For a Zenodo record, that is:
+
+```bash
+S2_DATA_URL=https://zenodo.org/records/<RECORD_ID>/files \
+S2_URL_SUFFIX='?download=1' ./prepare_author_data.sh
+```
+
+Or, if you already downloaded the zips into `data/` by hand, just:
+
+```bash
+./prepare_author_data.sh
+```
+
+The script downloads what is missing, unpacks it, and verifies all 66 scenes are
+present. It is idempotent — re-running it skips anything already staged.
+
+| Archive | Size | Purpose |
+|---|---|---|
+| `s2_original_2048.zip` | 333 MB | **66 scenes, 2048×2048 RGB — the workflow input** |
+| `S2_data_training.zip` | 341 MB | Authors' pre-tiled images + labels (63 scenes) — validation reference |
+| `S2_tiff.zip` | 8.3 GB | 52 source GeoTIFFs with S2 granule IDs — provenance only, not needed to run |
+
+`S2_tiff.zip` is skipped by default; pass `WITH_TIFF=1` to stage it too.
+
+After staging:
+
+```
+data/
+├── s2_original_2048/        # 66 scene PNGs, 2048×2048 — workflow input
+│   ├── s2_vis_00.png
+│   └── ... s2_vis_65.png
+└── S2_data_training/        # validation reference (not training input)
+    ├── train_images_4032/   # 4032 tiles, 256×256
+    └── train_masks_4032/    # 4032 matching labels
+```
+
+> These are **ZIP64** archives. macOS's bundled `unzip` reports
+> `start of central directory not found` on them — that file is not corrupt.
+> `prepare_author_data.sh` unpacks via Python's `zipfile`, which handles ZIP64
+> correctly. To do it by hand:
+> `python3 -c "import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('data')" data/<archive>.zip`
+
+#### Publishing the dataset to Zenodo
+
+If you are the one hosting this data, `publish_to_zenodo.py` uploads it through
+Zenodo's REST API. The browser uploader is unreliable above a few GB and
+`S2_tiff.zip` is 8.3 GB, so the API is the practical route.
+
+```bash
+pip install requests
+
+# 0. Name the files as the staging script expects them
+mv data/s2_original_2048-*.zip data/s2_original_2048.zip
+
+# 1. Fill in the real authors, title and license
+$EDITOR zenodo_metadata.json
+
+# 2. Rehearse on the sandbox (separate account and token from production)
+export ZENODO_TOKEN=<sandbox token from sandbox.zenodo.org>
+./publish_to_zenodo.py --sandbox --files data/*.zip
+
+# 3. For real — uploads and leaves a DRAFT for you to review
+export ZENODO_TOKEN=<token from zenodo.org>
+./publish_to_zenodo.py --files data/*.zip
+
+# 4. Review the draft in the browser, then release it
+./publish_to_zenodo.py --deposition <ID> --publish
+```
+
+Get a token at **Account → Applications → Personal access tokens**, with the
+`deposit:write` and `deposit:actions` scopes.
+
+The script streams each file (so the 8.3 GB upload does not need 8.3 GB of RAM),
+verifies Zenodo's MD5 against a locally computed one, refuses to run while
+`zenodo_metadata.json` still has placeholder authors, and prints the exact
+`S2_DATA_URL` line for the README once published.
+
+> **Published files are immutable.** A mistake can only be superseded by a new
+> version, never corrected in place — which is why step 2 exists. Zenodo allows
+> 50 GB per record, so all three archives fit in one.
+>
+> Re-publishing someone else's data under a DOI needs their agreement and their
+> names in `creators` — that attribution is what the DOI carries.
+
+**Option 2 — re-download from Google Earth Engine.** Only needed if you want to rebuild
+the dataset from source. Results will differ slightly from the paper: GEE re-exports are
+not pixel-identical to the authors' scenes, and the export may not return all 66.
+
+```bash
 pip install earthengine-api
 pip install -r requirements.txt
 
-# 2. Download and split into 256x256 training tiles
-python download_data.py --method local --output-dir data/s2_scenes --split-tiles
-    
-python download_data.py --method local --output-dir data/s2_scenes --split-tiles --max-scenes 10
+python download_data.py --method local --output-dir data/s2_scenes
 
-# Export to Google Drive (recommended for large downloads)
+# Export to Google Drive instead (for large exports)
 python download_data.py --project ee-yourproject \
     --method drive --drive-folder s2_ross_sea
 ```
 
-After downloading, your data directory should look like:
+`download_data.py` now exports at 2048×2048 to match the paper's scene geometry.
 
-```
-data/
-└── s2_scenes/          # Full 2000×2000 scene PNGs (workflow input)
-    ├── s2_vis_00.png
-    ├── s2_vis_01.png
-    └── ...
-```
-
-> **Note**: With auto-labeling (the default), **no separate training data directories are needed**. The workflow produces everything within the DAG: scenes are resized to 2048×2048 (`resize_image`), `split_images` jobs tile each scene into 256×256 grayscale training images, and `split_masks` jobs tile the Stage 1 segmentation masks into matching 256×256 grayscale labels. Both use the same grid so image/mask counts always match, and 2048 divides evenly by 256 so no padding enters the labels. (With `--scene-size 0`, edge tiles are padded — masks with the open-water gray value 149, never zero — so padding cannot become a phantom label class; the zero-padding artifact that cost ~3.5 pt in pegasus2-run0001 is documented in `comparison_report.html` §8.1.) This is the auto-labeling approach described in the paper. If you have external ground-truth data, pass `--no-auto-label` with `--train-images-dir`/`--train-masks-dir`.
+> **Note**: With auto-labeling (the default), **no separate training data directories are needed**. The workflow produces everything within the DAG: scenes are resized to 2048×2048 (`resize_image`), `split_images` jobs tile each scene into 256×256 grayscale training images, and `split_masks` jobs tile the Stage 1 segmentation masks into matching 256×256 grayscale labels. Both use the same grid so image/mask counts always match, and 2048 divides evenly by 256 so no padding enters the labels. (With `--scene-size 0`, edge tiles are padded — masks with the open-water gray value 149, never zero — so padding cannot become a phantom label class; the zero-padding artifact that cost ~3.5 pt in pegasus2-run0001 is documented in `comparison_report.html` §7.1.) This is the auto-labeling approach described in the paper. If you have external ground-truth data, pass `--no-auto-label` with `--train-images-dir`/`--train-masks-dir`.
 
 ### Using Synthetic Test Data
 
@@ -207,13 +294,13 @@ docker push kthare10/s2-segmentation:latest
 **Canonical paper reproduction — just the defaults:**
 
 ```bash
-# The defaults do EVERYTHING the paper describes: resize scenes to
-# 2048×2048, auto-label (Fig 6), train BOTH the unfiltered and the
-# thin-cloud/shadow-filtered U-Net with self-consistent labels
-# (Table IV), stratified high/low-cloud evaluation (Table V, Fig 13),
-# and whole-scene inference (Fig 9/14).
+# The defaults do EVERYTHING the paper describes: auto-label (Fig 6),
+# train BOTH the unfiltered and the thin-cloud/shadow-filtered U-Net
+# with self-consistent labels (Table IV), stratified high/low-cloud
+# evaluation (Table V, Fig 13), and whole-scene inference (Fig 9/14).
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_*.png \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --output workflow.yml
 
 pegasus-plan --submit -s condorpool -o local workflow.yml
@@ -223,40 +310,56 @@ pegasus-plan --submit -s condorpool -o local workflow.yml
 
 ```bash
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_00.png data/s2_scenes/s2_vis_01.png \
+    --images data/s2_original_2048/s2_vis_00.png data/s2_original_2048/s2_vis_01.png \
+    --scene-size 0 \
     --output workflow.yml
 
 pegasus-plan --submit -s condorpool -o local workflow.yml
 ```
 
+> The examples below assume the staged dataset from
+> [Getting the Dataset](#getting-the-dataset). They all take `--scene-size 0`
+> for the same reason as above: those scenes are already 2048×2048, so the
+> resize step is skipped and nothing is resampled. Drop that flag if your
+> scenes came from a raw 2000×2000 GEE export.
+
 **Variant scenarios (subsequent comparison runs — non-default flags):**
 
 ```bash
 # Stage 1 color segmentation only (no training)
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --no-auto-label --output workflow.yml
 
 # Skip the optional paper outputs for a faster training-only run
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --no-infer --no-stratified-eval --output workflow.yml
 
 # Unfiltered branch only
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --paths orig --output workflow.yml
 
 # Honest cross-comparison: filtered inputs + raw-scene labels
 # (yields ~90%, exposing that the paper's 98.97% requires
-# label-consistency — see comparison_report.html §5)
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+# label-consistency — see comparison_report.html §4)
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --paths filtered --filtered-labels raw --output workflow.yml
 
 # Per-tile filter variant (the Spark reference's inference path)
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --filter-scale tile --output workflow.yml
 
-# Native scene size (2000×2000, padded) instead of the paper's 2048
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
-    --scene-size 0 --output workflow.yml
+# Authors' scenes, already 2048×2048 — skip the resize entirely (no resampling)
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 --original-size 2048 --output workflow.yml
+
+# A raw 2000×2000 GEE export at its native size (edge tiles are padded)
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 --original-size 2000 --output workflow.yml
 ```
 
 See `comparison_report.md` for a side-by-side of every run mode against
@@ -268,13 +371,15 @@ the paper's reported numbers (U-Net-Auto: 90.18% original, 98.97% filtered).
 # Horovod — uses multiple GPUs across nodes for training.
 # Requires the container image built with Horovod support (see step 1).
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_*.png \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --training-mode horovod \
     --output workflow.yml
 
 # With pre-existing masks + Horovod
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_*.png \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --no-auto-label \
     --train-images-dir data/train_images/ \
     --train-masks-dir data/train_masks/ \
@@ -292,7 +397,8 @@ pegasus-plan --submit -s condorpool -o local workflow.yml
 # default — pass --scene-size 0 to keep native size). Does NOT produce
 # 256×256 training tiles; the default auto-label mode does that.
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_*.png \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --output workflow.yml
 
 pegasus-plan --submit -s condorpool -o local workflow.yml
@@ -304,7 +410,8 @@ pegasus-plan --submit -s condorpool -o local workflow.yml
 # Use this only when you already have a directory of 256×256 mask
 # tiles (e.g. from external ground-truth labels)
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_*.png \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --train-images-dir data/train_images/ \
     --train-masks-dir data/train_masks/ \
     --output workflow.yml
@@ -385,6 +492,43 @@ With a single unlabeled path (`--no-auto-label`), the same files are emitted wit
 
 ## Reproducing the Paper
 
+### Quick start — full reproduction in four commands
+
+From a fresh clone, on a machine with Pegasus + HTCondor and a GPU:
+
+```bash
+# 1. Stage the dataset (66 scenes, ~670 MB; skip S2_DATA_URL if the zips are already in data/)
+S2_DATA_URL=<base-url-of-the-published-record> ./prepare_author_data.sh
+
+# 2. Build the container image the jobs run in
+docker build -t kthare10/s2-segmentation:latest Docker/
+
+# 3. Generate the DAG — this is Run A, the canonical reproduction
+python workflow_generator.py \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
+    --output workflow_A.yml
+
+# 4. Plan and submit
+pegasus-plan --submit -s condorpool -o local workflow_A.yml
+```
+
+Expect `Source images: 66` / `Tiles per image: 64` / `Total parallel segment jobs: 4224`
+in step 3 — that is the paper's dataset. Monitor with `pegasus-status <run-dir>`.
+
+`--scene-size 0` is the one flag that matters: these scenes are natively 2048×2048, so
+it skips the resize step and nothing is resampled. Everything else is already the
+paper's configuration by default (scene-scale filter with kernel 155, both training
+branches, stratified evaluation, whole-scene inference).
+
+When it finishes, generate the comparison against the published numbers:
+
+```bash
+python compare_with_paper.py --run-dir <run-dir> --output comparison_report.md
+```
+
+The rest of this section explains what each run covers and how to vary it.
+
 The paper (Iqrah et al., *"A Parallel Workflow for Polar Sea-Ice Classification using
 Auto-labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024) reports five distinct claims:
 
@@ -437,7 +581,8 @@ training branches, stratified evaluation, and whole-scene inference. No flags ne
 
 ```bash
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_*.png \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --output workflow_A.yml
 
 pegasus-plan --submit -s condorpool -o local workflow_A.yml
@@ -449,7 +594,7 @@ Produces (per branch — `orig` and `filtered`):
 - `{orig,filtered}_stratified_summary.json` → Table V row summary
 - `{orig,filtered}_confusion_matrix.png` + `{orig,filtered}_{high,low}_cloud_confusion_matrix.png`
   → Fig 13 (U-Net-Auto row)
-- `{orig,filtered}_infer_<scene>.png` (63 scenes × 2 branches) → Fig 14 (U-Net-Auto column)
+- `{orig,filtered}_infer_<scene>.png` (66 scenes × 2 branches) → Fig 14 (U-Net-Auto column)
 - `filtered_s2_vis_*.png` → paper Fig 5 cleaned-scene grid
 
 ### Run B — §2.4 per-tile filter variant (optional comparison)
@@ -460,7 +605,8 @@ it stays the same fraction of the input dimension.
 
 ```bash
 python workflow_generator.py \
-    --images data/s2_scenes/s2_vis_*.png \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --filter-scale tile \
     --output workflow_B.yml
 
@@ -486,14 +632,16 @@ distinct `--output` filename so the output directories don't collide:
 
 ```bash
 # 1 GPU baseline
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --paths filtered --no-infer --no-stratified-eval \
     --training-mode single-gpu --output workflow_1gpu.yml
 pegasus-plan --submit -s condorpool -o local workflow_1gpu.yml
 
 # 2/4/8 GPUs on one node (MirroredStrategy)
 for N in 2 4 8; do
-    python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+    python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
         --paths filtered --no-infer --no-stratified-eval \
         --training-mode mirrored --output workflow_${N}gpu.yml
     # request_gpus = N is set in your HTCondor site profile.
@@ -501,7 +649,8 @@ for N in 2 4 8; do
 done
 
 # Optional: Horovod multi-node (replicas across hosts)
-python workflow_generator.py --images data/s2_scenes/s2_vis_*.png \
+python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
     --paths filtered --no-infer --no-stratified-eval \
     --training-mode horovod --output workflow_horovod.yml
 pegasus-plan --submit -s condorpool -o local workflow_horovod.yml

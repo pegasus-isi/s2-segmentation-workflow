@@ -110,15 +110,19 @@ These gaps block full reproducibility of the paper's claims.
   directory through `preprocess_data.py` and add a parallel training
   branch (suffix `_man`).
 
-### 2.3 Dataset size: 63 vs 66 scenes
+### 2.3 Dataset size: 63 vs 66 scenes — ✅ resolved
 
 - **Paper:** 66 scenes / 4,224 tiles.
-- **Our workflow:** 63 scenes / 4,032 tiles — missing
-  `s2_vis_56/57/64.png`. Now **documented** in README and SPEC §6: the
-  reference scripts themselves load `train_images_4032/` (63 scenes), so 63/4032
-  matches the reference code even though the paper text says 66/4224.
-- **Effort to close fully:** **Small.** Recover the missing three scenes from GEE
-  (`download_data.py`) if exact paper-text parity is required.
+- **Was:** 63 scenes / 4,032 tiles, because our GEE export was missing
+  `s2_vis_56/57/64.png`. The 63/4032 framing was an artifact of that export,
+  not a property of the paper.
+- **Resolved by:** the authors supplying all 66 source scenes directly
+  (`s2_original_2048/`, natively 2048×2048). The workflow now runs the paper's
+  full 66 scenes / 4,224 tiles; `prepare_author_data.sh` stages them and
+  `--scene-size 0 --original-size 2048` consumes them without resampling.
+- **Note:** the authors' own pre-tiled set (`train_images_4032/`) still covers
+  only 63 scenes — they never tiled `s2_vis_56/57/64`. That set is retained as a
+  label-validation reference, not as training input.
 
 ### 2.4 Filter applied at full-scene scale, not per tile — ✅ resolved
 

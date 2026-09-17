@@ -831,7 +831,7 @@ Examples:
   # Variant scenarios (non-default, for comparison runs)
   %(prog)s --images data/s2_scenes/s2_vis_*.png --filter-scale tile
   %(prog)s --images data/s2_scenes/s2_vis_*.png --filtered-labels raw
-  %(prog)s --images data/s2_scenes/s2_vis_*.png --scene-size 0   # native 2000², padded
+  %(prog)s --images data/s2_original_2048/s2_vis_*.png --scene-size 0  # authors' native 2048², no resample
 
   # Horovod distributed training (paper Fig 12)
   %(prog)s --images data/s2_scenes/s2_vis_*.png --training-mode horovod
@@ -858,10 +858,11 @@ Examples:
                         help="Stage 1 color-segmentation tile size in pixels "
                              "(default: 256, matching the paper; the legacy "
                              "parallel demo used 250).")
-    parser.add_argument("--original-size", type=int, default=2000,
-                        help="Native input scene dimension (default: 2000, "
-                             "the GEE export size). Only used when "
-                             "--scene-size 0 disables in-DAG resizing.")
+    parser.add_argument("--original-size", type=int, default=2048,
+                        help="Native input scene dimension (default: 2048, the "
+                             "authors' scene geometry). Only used when "
+                             "--scene-size 0 disables in-DAG resizing; set 2000 "
+                             "if your scenes came from a raw GEE export.")
     parser.add_argument("--scene-size", type=int, default=2048,
                         help="Resize every scene to this square size before "
                              "any tiling (default: 2048, the paper's scene "
@@ -982,13 +983,18 @@ Examples:
         sys.exit(1)
 
     n_images = len(args.images)
-    n_tiles = n_images * (args.original_size // args.tile_size) ** 2
+    # Report against the size the DAG actually tiles (create_workflow uses the
+    # same expression), not the native input size — with --scene-size 2048 and
+    # --original-size 2000 these disagree and the summary under-counts.
+    effective_size = args.scene_size if args.scene_size else args.original_size
+    tiles_per_image = len(range(0, effective_size, args.tile_size)) ** 2
+    n_tiles = n_images * tiles_per_image
 
     logger.info("=" * 70)
     logger.info("S2 SEGMENTATION WORKFLOW GENERATOR")
     logger.info("=" * 70)
     logger.info(f"Source images: {n_images}")
-    logger.info(f"Tiles per image: {(args.original_size // args.tile_size) ** 2}")
+    logger.info(f"Tiles per image: {tiles_per_image} (scene {effective_size}px / tile {args.tile_size}px)")
     logger.info(f"Total parallel segment jobs: {n_tiles}")
     stage2_enabled = args.auto_label or (args.train_images_dir and args.train_masks_dir)
     logger.info(f"Stage 2 (U-Net): {'enabled' if stage2_enabled else 'disabled'}")

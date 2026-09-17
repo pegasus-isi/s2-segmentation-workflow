@@ -289,6 +289,17 @@ def render_comprehensive(run_a: dict, run_b: dict,
       "All comparisons are against the paper's **U-Net-Auto** column; the "
       "manually-labeled **U-Net-Man** results are out of scope (see §0.5).")
     A("")
+    A("> **Which dataset these runs used.** Runs A and B predate the authors' "
+      "data release. They ran on a **63-scene Google Earth Engine export** "
+      "(`s2_vis_56/57/64` were missing), exported at 2000x2000 and resized "
+      "in-DAG to 2048x2048 — so every tile was resampled. The paper's dataset "
+      "is **66 scenes / 4,224 tiles**, which the authors have since supplied "
+      "natively at 2048x2048 (`s2_original_2048/`); the workflow now runs it "
+      "with no resampling at all. **The numbers below are therefore a "
+      "reproduction on near-but-not-identical data.** A run on the authors' "
+      "scenes is the outstanding item — until then, read every delta in this "
+      "report as carrying that caveat.")
+    A("")
 
     # 0.1 Table IV
     A("### 0.1 Table IV — overall accuracy")
@@ -309,7 +320,8 @@ def render_comprehensive(run_a: dict, run_b: dict,
     A("Both runs **exceed** the paper on original imagery; Run A also exceeds it on "
       "filtered while Run B falls 1.45 pt short. Our edge over the paper traces to "
       "self-consistent auto-labels (color-segmentation of the same tile the U-Net "
-      "sees), the 63-scene subset, and unseeded init variance.")
+      "sees), the 63-scene resampled export these runs used (see the note in "
+      "\u00a70), and unseeded init variance.")
     A("")
     A("> **Read the orig row as a variance baseline, not a filter-scale result.** "
       "The thin-cloud/shadow filter only touches the *filtered* branch — the "
@@ -444,7 +456,7 @@ def render_comprehensive(run_a: dict, run_b: dict,
     A("| **Table I — Python multiprocessing speedup (4.5×)** | ❌ Not compared | Reference uses `multiprocessing.Pool` on one host; our pipeline parallelizes via Pegasus/HTCondor job fan-out — a different model, not benchmarked. |")
     A("| **Table II — PySpark map-reduce speedup (16.25×)** | ❌ Not compared | Spark map-reduce not used; the Pegasus DAG replaces it. |")
     A("| **Table III / Fig 12 — Horovod training scaling (7.21× @ 8 GPU)** | ❌ Not run | Needs a 1/2/4/6/8-GPU sweep on a DGX-class node (Run C); our runs used single-GPU training. |")
-    A("| **Dataset size (66 scenes / 4224 tiles)** | ⚠️ Differs | We use 63 scenes / 4032 tiles — matches the reference code's `train_images_4032/`; `s2_vis_56/57/64` are absent from our GEE export. |")
+    A("| **Dataset size (66 scenes / 4224 tiles)** | ✅ Matches | The authors supplied all 66 source scenes (2048×2048 native, `s2_original_2048/`), so the workflow runs the paper's full 66 × 64 = 4,224 tiles. Runs A/B predate this and used the 63-scene GEE export. |")
     A("")
     A("See [`gap_analysis.md`](gap_analysis.md) for the full audit of these "
       "not-compared items (U-Net-Man baseline, SSIM, Spark/multiprocessing "

@@ -106,7 +106,7 @@ def export_scenes_to_drive(collection, roi, output_folder, max_scenes=None):
     return tasks
 
 
-def export_scenes_to_local(collection, roi, output_dir, tile_size=2000,
+def export_scenes_to_local(collection, roi, output_dir, tile_size=2048,
                            max_scenes=None):
     """Download scenes directly as NumPy arrays and save as PNG tiles.
 
@@ -257,8 +257,10 @@ Examples:
         help="Max number of scenes to download (default: all)",
     )
     parser.add_argument(
-        "--scene-size", type=int, default=2000,
-        help="Scene download size in pixels (default: 2000)",
+        "--scene-size", type=int, default=2048,
+        help="Scene download size in pixels (default: 2048, the authors' "
+             "native scene geometry — divides evenly by 256, so no in-DAG "
+             "resize and no padded edge tiles)",
     )
     parser.add_argument(
         "--split-tiles", action="store_true",

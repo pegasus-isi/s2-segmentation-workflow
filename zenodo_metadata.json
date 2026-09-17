@@ -1,0 +1,28 @@
+{
+  "title": "Sentinel-2 Antarctic Sea-Ice Dataset for Parallel Auto-Labeled Segmentation (Ross Sea, November 2019)",
+  "upload_type": "dataset",
+  "description": "<p>Sentinel-2 optical imagery of the Antarctic Ross Sea (November 2019) used for polar sea-ice classification via auto-labeled U-Net segmentation.</p><p><strong>Contents</strong></p><ul><li><code>s2_original_2048.zip</code> (333 MB) &mdash; 66 scenes, 2048&times;2048 RGB PNG. These tile evenly into 66 &times; 64 = 4,224 tiles of 256&times;256, the dataset described in the paper. This is the workflow input.</li><li><code>S2_data_training.zip</code> (341 MB) &mdash; the authors' pre-tiled training set: 4,032 image tiles and 4,032 matching 3-class label masks (ice / thin ice / open water, encoded red / blue / green), covering 63 of the 66 scenes. Provided as a label-validation reference.</li><li><code>S2_tiff.zip</code> (8.3 GB) &mdash; 52 source GeoTIFFs, named with their Sentinel-2 acquisition timestamps and MGRS granule IDs (acquisitions span 2019-11-03 to 2019-11-27 across 40 MGRS tiles). Provenance only; not required to run the workflow.</li></ul><p><strong>Notes</strong></p><ul><li>All three are ZIP64 archives. Older <code>unzip</code> builds (including macOS's bundled one) report <em>&quot;start of central directory not found&quot;</em> &mdash; the files are not corrupt. Use Python: <code>python3 -c \"import zipfile,sys; zipfile.ZipFile(sys.argv[1]).extractall('data')\" &lt;archive&gt;.zip</code></li><li>Scenes 56, 57 and 64 exist in <code>s2_original_2048.zip</code> but were never tiled, which is why the pre-tiled set covers 63 scenes rather than 66.</li></ul><p>Reproduction workflow: see the accompanying Pegasus workflow repository.</p>",
+  "creators": [
+    {"name": "REPLACE ME, Author One", "affiliation": ""}
+  ],
+  "license": "cc-by-4.0",
+  "access_right": "open",
+  "keywords": [
+    "Sentinel-2",
+    "sea ice",
+    "Antarctica",
+    "Ross Sea",
+    "remote sensing",
+    "semantic segmentation",
+    "U-Net",
+    "auto-labeling",
+    "Pegasus WMS"
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "10.1109/IPDPSW63119.2024.00172",
+      "relation": "isSupplementTo",
+      "scheme": "doi"
+    }
+  ]
+}

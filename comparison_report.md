@@ -4,6 +4,8 @@
 
 Two runs of the **U-Net-Auto** pipeline, identical except for the thin-cloud/shadow filter scale: **Run A** (run0002 (Run A, scene filter), scene-scale filter — the paper's described configuration) and **Run B** (run0003 (Run B, tile filter), per-tile filter — the Spark reference's inference path). All comparisons are against the paper's **U-Net-Auto** column; the manually-labeled **U-Net-Man** results are out of scope (see §0.5).
 
+> **Which dataset these runs used.** Runs A and B predate the authors' data release. They ran on a **63-scene Google Earth Engine export** (`s2_vis_56/57/64` were missing), exported at 2000x2000 and resized in-DAG to 2048x2048 — so every tile was resampled. The paper's dataset is **66 scenes / 4,224 tiles**, which the authors have since supplied natively at 2048x2048 (`s2_original_2048/`); the workflow now runs it with no resampling at all. **The numbers below are therefore a reproduction on near-but-not-identical data.** A run on the authors' scenes is the outstanding item — until then, read every delta in this report as carrying that caveat.
+
 ### 0.1 Table IV — overall accuracy
 
 | Condition | Paper | Run A (scene) | Run B (tile) | A−paper | B−paper |
@@ -11,7 +13,7 @@ Two runs of the **U-Net-Auto** pipeline, identical except for the thin-cloud/sha
 | Original S2 imagery | 90.18% | 96.25% | 94.02% | +6.07 | +3.84 |
 | Thin cloud / shadow filtered | 98.97% | 99.76% | 97.52% | +0.79 | -1.45 |
 
-Both runs **exceed** the paper on original imagery; Run A also exceeds it on filtered while Run B falls 1.45 pt short. Our edge over the paper traces to self-consistent auto-labels (color-segmentation of the same tile the U-Net sees), the 63-scene subset, and unseeded init variance.
+Both runs **exceed** the paper on original imagery; Run A also exceeds it on filtered while Run B falls 1.45 pt short. Our edge over the paper traces to self-consistent auto-labels (color-segmentation of the same tile the U-Net sees), the 63-scene resampled export these runs used (see the note in §0), and unseeded init variance.
 
 > **Read the orig row as a variance baseline, not a filter-scale result.** The thin-cloud/shadow filter only touches the *filtered* branch — the **original branch consumes byte-identical tiles in both runs** (same resize, split, and seed-0 test split). So the 2.23 pt orig gap (96.25 vs 94.02) is **pure unseeded training variance**, not an effect of filter scale. The meaningful filter-scale comparison is the *filtered* row, and even there a ~2 pt slice is variance of this magnitude — see §0.6.
 
@@ -120,7 +122,7 @@ Run B  thin          60.5   39.5    0.0
 | **Table I — Python multiprocessing speedup (4.5×)** | ❌ Not compared | Reference uses `multiprocessing.Pool` on one host; our pipeline parallelizes via Pegasus/HTCondor job fan-out — a different model, not benchmarked. |
 | **Table II — PySpark map-reduce speedup (16.25×)** | ❌ Not compared | Spark map-reduce not used; the Pegasus DAG replaces it. |
 | **Table III / Fig 12 — Horovod training scaling (7.21× @ 8 GPU)** | ❌ Not run | Needs a 1/2/4/6/8-GPU sweep on a DGX-class node (Run C); our runs used single-GPU training. |
-| **Dataset size (66 scenes / 4224 tiles)** | ⚠️ Differs | We use 63 scenes / 4032 tiles — matches the reference code's `train_images_4032/`; `s2_vis_56/57/64` are absent from our GEE export. |
+| **Dataset size (66 scenes / 4224 tiles)** | ✅ Matches | The authors supplied all 66 source scenes (2048×2048 native, `s2_original_2048/`), so the workflow runs the paper's full 66 × 64 = 4,224 tiles. Runs A/B predate this and used the 63-scene GEE export. |
 
 See [`gap_analysis.md`](gap_analysis.md) for the full audit of these not-compared items (U-Net-Man baseline, SSIM, Spark/multiprocessing speedups) — paper claim by claim, with effort estimates.
 
