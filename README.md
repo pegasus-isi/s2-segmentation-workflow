@@ -703,6 +703,67 @@ side-by-side images and the headline-metric delta table.
 
 See `gap_analysis.md` for the full audit of paper / reference-code / workflow coverage.
 
+## Troubleshooting
+
+### Jobs go on hold and the DAG reports no failures
+
+`pegasus-status` shows `FAILURE 0` and a slowly rising `%DONE` while nothing
+actually completes. Held jobs are **not** counted as DAG failures, so the run
+looks healthy from the summary alone. Always check the queue directly:
+
+```bash
+condor_q -totals                       # look at the "held" count
+condor_q -held -af HoldReason | head   # why they are held
+```
+
+### `image format not recognized` — every containerized job dies
+
+```
+FATAL: While checking container encryption: could not open image
+       .../s2_container.simg: image format not recognized
+```
+
+The symptom that reaches the DAG is a *missing output file*
+(`filtered_s2_vis_40.png: No such file or directory` at stage-out), which looks
+like a bug in the job's script. It is not — the job never ran, because its
+container could not be opened.
+
+**Cause.** The published image is an OCI **image index**, which is what a
+BuildKit/`buildx` build produces when provenance and SBOM attestations are on
+(the index carries an extra `architecture: unknown, os: unknown` entry). Pegasus
+stages such an image by exporting an OCI **tar archive** and naming it `.simg`;
+Apptainer cannot open that. Confirm with:
+
+```bash
+file <run-dir>/../scratch/.../s2_container.simg
+# POSIX tar archive     <- broken (should be: run-singularity script executable)
+```
+
+**Fix — build the SIF yourself and point the workflow at it.** Apptainer
+converts the image correctly on its own; only Pegasus's staging path is at
+fault.
+
+```bash
+apptainer pull ~/containers/s2_container.sif docker://kthare10/s2-segmentation:latest
+file ~/containers/s2_container.sif      # -> run-singularity script executable
+
+python workflow_generator.py \
+    --images data/s2_original_2048/s2_vis_*.png \
+    --scene-size 0 \
+    --container-image ~/containers/s2_container.sif
+```
+
+`--container-image` accepts a Docker Hub reference, an explicit `docker://` URL,
+or a local `.sif`/`.simg` path (resolved to `file://` with `image.site: local`).
+
+**Durable alternative.** Rebuild and re-push the image without attestations so
+`docker://` works everywhere, no per-host SIF needed:
+
+```bash
+docker buildx build --provenance=false --sbom=false \
+    -t kthare10/s2-segmentation:latest --push Docker/
+```
+
 ## License
 
 This project is licensed under the **Apache License, Version 2.0** — see the
