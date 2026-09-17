@@ -96,6 +96,19 @@ class S2SegmentationWorkflow:
         self.props = Properties()
         self.props["pegasus.transfer.threads"] = "16"
         self.props["pegasus.transfer.worker.package.strict"] = "false"
+        # Every per-scene Stage 1 job carries a pegasus "label" profile set to
+        # its scene basename, so `pegasus-plan --cluster label` collapses a
+        # scene's whole chain (split -> 64 color_segment -> merge -> filter ->
+        # ...) into ONE clustered job. The Stage 2 jobs (preprocess, train,
+        # evaluate, plots, infer) are deliberately unlabeled and stay
+        # standalone.
+        #
+        # This matters far more than it looks: a color_segment job does ~1s of
+        # work but spends ~105s staging and integrity-checking the multi-GB
+        # container. Unclustered, that overhead is paid ~9,000 times and
+        # dominates the entire run (measured: 7.7 jobs/min, ~21h). Clustered,
+        # it is paid once per scene.
+        self.props["pegasus.clusterer.label.key"] = "label"
 
     # ------------------------------------------------------------------
     # Site Catalog
