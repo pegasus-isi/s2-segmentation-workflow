@@ -95,7 +95,8 @@ run_workflow() {
         workflow.yml 2>&1 | tee /tmp/pegasus_plan_output.txt
 
     local run_dir
-    run_dir=$(grep -oP 'pegasus-status\s+\K\S+' /tmp/pegasus_plan_output.txt 2>/dev/null | head -1 || true)
+    # pegasus-plan prints 'pegasus-status -l <run-dir>', so skip any flags
+    run_dir=$(grep -oP 'pegasus-status(\s+-\S+)*\s+\K/\S+' /tmp/pegasus_plan_output.txt 2>/dev/null | head -1 || true)
     if [[ -n "${run_dir}" ]]; then
         info "Submitted!"
         info "Monitor:  pegasus-status ${run_dir}"
