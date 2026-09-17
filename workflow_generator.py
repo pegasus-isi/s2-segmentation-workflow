@@ -139,11 +139,29 @@ class S2SegmentationWorkflow:
                                        container_image="kthare10/s2-segmentation:latest"):
         self.tc = TransformationCatalog()
 
+        # A bare "repo/name:tag" is pulled from Docker Hub. Anything carrying a
+        # scheme (docker://, shub://, http(s)://) or naming a local .sif/.simg
+        # is passed through untouched, with image_site set to match.
+        #
+        # Prefer a pre-built local SIF when the published image is an OCI
+        # image index (a BuildKit build with provenance/SBOM attestations
+        # produces one). Pegasus stages such an image as an OCI *tar archive*
+        # named .simg, and Apptainer then fails on every job with
+        # "image format not recognized" — while the DAG reports no failures,
+        # because the jobs go on hold at stage-out instead.
+        if "://" in container_image:
+            image, image_site = container_image, "docker_hub"
+        elif container_image.endswith((".sif", ".simg")):
+            image = f"file://{os.path.abspath(container_image)}"
+            image_site = "local"
+        else:
+            image, image_site = f"docker://{container_image}", "docker_hub"
+
         container = Container(
             "s2_container",
             container_type=Container.SINGULARITY,
-            image=f"docker://{container_image}",
-            image_site="docker_hub",
+            image=image,
+            image_site=image_site,
         )
 
         # CPU-bound transformations (Stage 1 + preprocess)
@@ -849,7 +867,12 @@ Examples:
                         help="Output file (default: workflow.yml)")
     parser.add_argument("--container-image", type=str,
                         default="kthare10/s2-segmentation:latest",
-                        help="Docker container image")
+                        help="Container image: a Docker Hub reference "
+                             "(repo/name:tag), an explicit URL (docker://...), "
+                             "or a path to a pre-built local .sif/.simg. "
+                             "Use a local SIF if the published image is an OCI "
+                             "index — Pegasus stages those as an OCI tar that "
+                             "Apptainer cannot open.")
 
     # Stage 1: Color segmentation
     parser.add_argument("--images", type=str, nargs="+", required=True,
