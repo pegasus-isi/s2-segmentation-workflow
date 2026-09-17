@@ -3,10 +3,9 @@
 # prepare_and_run.sh — Prepare local Sentinel-2 scenes and run the
 # s2-segmentation workflow.
 #
-# This script does NOT download anything. It assumes the Sentinel-2 scene
-# PNGs have already been placed in data/s2_scenes/ (transferred manually,
-# or produced by download_data.py). It only prepares the local data and
-# launches the workflow.
+# This script does NOT download anything. It assumes the Sentinel-2 scenes
+# are already staged — run ./prepare_author_data.sh, or place a GEE export in
+# data/s2_scenes/. It only prepares the local data and launches the workflow.
 #
 # By default --auto-label trains BOTH the unfiltered and the
 # thin-cloud/shadow-filtered U-Net (paper Table IV) from a single DAG.
@@ -17,7 +16,12 @@
 set -euo pipefail
 
 WORKFLOW_DIR="$HOME/s2-segmentation-workflow"
-DATA_DIR="${WORKFLOW_DIR}/data/s2_scenes"
+# Prefer the authors' 2048x2048 scenes; fall back to a GEE export in s2_scenes/.
+if [[ -d "${WORKFLOW_DIR}/data/s2_original_2048" ]]; then
+    DATA_DIR="${WORKFLOW_DIR}/data/s2_original_2048"
+else
+    DATA_DIR="${WORKFLOW_DIR}/data/s2_scenes"
+fi
 
 info()  { echo -e "\033[1;34m[INFO]\033[0m  $*" >&2; }
 warn()  { echo -e "\033[1;33m[WARN]\033[0m  $*" >&2; }
@@ -60,10 +64,20 @@ run_workflow() {
     # scenes resized in-DAG to 2048x2048, 256x256 tiles, auto-label,
     # both training branches, stratified eval, whole-scene inference.
     # Native scene size (${img_size}) only matters with --scene-size 0.
+    # Scenes that already tile evenly (the authors' 2048) need no resize at
+    # all, so skip Stage 0 rather than resample every scene to its own size.
+    local resize_args=(--original-size "${img_size}")
+    if (( img_size % 256 == 0 )); then
+        info "Native ${img_size} tiles evenly by 256 — skipping the resize stage"
+        resize_args+=(--scene-size 0)
+    else
+        info "Native ${img_size} does not tile evenly — resizing to 2048 in-DAG"
+    fi
+
     info "Generating Pegasus workflow (paper-default configuration, native=${img_size})..."
     python3 workflow_generator.py \
         --images "${DATA_DIR}"/s2_vis_*.png \
-        --original-size "${img_size}" \
+        "${resize_args[@]}" \
         --output workflow.yml
 
     info "Planning and submitting workflow..."
