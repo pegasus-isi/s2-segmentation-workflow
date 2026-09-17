@@ -46,11 +46,19 @@ prepare_data() {
 
     # Detect image dimensions — print only the number to stdout
     local dims
+    # Read the width straight out of the PNG IHDR chunk — stdlib only, so
+    # this works on a submit host without Pillow installed (the jobs
+    # themselves run inside the container, which has it).
     dims=$(python3 -c "
-from PIL import Image
-import glob
+import glob, struct, sys
 imgs = sorted(glob.glob('${DATA_DIR}/s2_vis_*.png'))
-print(Image.open(imgs[0]).size[0])
+if not imgs:
+    sys.exit('no scenes found')
+with open(imgs[0], 'rb') as fh:
+    head = fh.read(24)
+if head[:8] != b'\x89PNG\r\n\x1a\n' or head[12:16] != b'IHDR':
+    sys.exit(f'not a PNG: {imgs[0]}')
+print(struct.unpack('>I', head[16:20])[0])
 ")
     info "Found ${count} scene images (${dims}x${dims} pixels)"
     echo "${dims}"
