@@ -45,15 +45,21 @@ comparison: <b>Run A</b> (scene-scale filter, the paper's config) and <b>Run B</
 filter). <b>§1A is the comprehensive, claim-by-claim comparison of both runs against the paper,
 including a table of what could <em>not</em> be compared and why.</b></p>
 <div class="callout">
-<b>Headline finding (pegasus2-run0002, 2026-06-13 — current canonical run).</b> The
-<b>paper-default</b> configuration (now the generator's defaults: scenes resized in-DAG to
-2048×2048, 256×256 tiles, auto-label, both branches, scene-scale filter, stratified eval,
-whole-scene inference) reaches <b class="good">96.25% accuracy</b> on original imagery (paper
-90.18%, <span class="good">+6.07 pt</span>) and <b class="good">99.76%</b> on thin-cloud/shadow
-filtered (paper 98.97%, <span class="good">+0.79 pt</span>). Resizing to 2048 eliminates the
-padding-class artifact that capped pegasus2-run0001's orig branch at 91.21% — the orig branch is
-now a clean 3-class problem and thin-ice recall recovers from 0.63 to 0.89. Cloud-stratified
-(Table V): orig high-cloud 94.32% / low-cloud 97.67%; filtered 99.64% / 99.86%. See §7.
+<b>Headline finding (run0003, 2026-09-18 — current canonical run, and the first on the
+authors' own data).</b> The <b>paper-default</b> configuration, run on the authors' <b>66
+native-2048² scenes</b> (the paper's full 66 × 64 = <b>4,224 tiles</b>, 3,379 train / 845 test,
+with no resampling at any stage), reaches <b class="good">96.69% accuracy</b> on original imagery
+(paper 90.18%, <span class="good">+6.51 pt</span>) and <b class="good">99.97%</b> on
+thin-cloud/shadow filtered (paper 98.97%, <span class="good">+1.00 pt</span>). Cloud-stratified
+(Table V): orig high-cloud 95.31% / low-cloud 97.62%; filtered 99.95% / 99.98%; all 845 test
+tiles stratified, none dropped.
+<br><br>
+<b>The key result is how little changed.</b> The previous canonical run (pegasus2-run0002) scored
+96.25% / 99.76% on a 63-scene GEE export resampled 2000→2048. Moving to the authors' true pixels
+and all 66 scenes shifts the headline by well under a point, so the earlier numbers were
+<em>not</em> an artifact of the incomplete export. The standing caveat also survives: we still
+exceed the paper by ~6.5 pt on orig, which reflects self-consistent auto-labels (the U-Net is
+scored against labels derived from the tiles it sees), not a better reproduction. See §7.
 </div>
 <div class="callout">
 <b>Headline finding (run0009).</b> With <b>self-consistent filtered labels</b>
@@ -80,27 +86,31 @@ already-padded tiles, so it has no padding class. See §7.
 </div>
 
 <h2>1A. Comprehensive comparison vs. the paper (Run A &amp; Run B)</h2>
-<p>The two production runs differ only in the thin-cloud/shadow <b>filter scale</b>:
-<b>Run A</b> (pegasus2-run0002, scene-scale filter — the paper's described configuration) and
-<b>Run B</b> (pegasus2-run0003, per-tile filter — the Spark reference's inference path).
+<p><b>Run A</b> (run0003 on the authors' 66-scene dataset, scene-scale filter — the paper's
+described configuration) and <b>Run B</b> (pegasus2-run0003, per-tile filter — the Spark
+reference's inference path, on the legacy 63-scene export). They differ in <b>both</b> filter
+scale and dataset, so the A–B delta isolates neither; Run A vs the paper is the comparison to
+trust.
 All numbers below are against the paper's <b>U-Net-Auto</b> column; the manually-labeled
 <b>U-Net-Man</b> results are out of scope (see <a href="#notcompared">§1A.5</a>).</p>
 
 <h3>1A.1 Table IV — overall accuracy</h3>
 <table>
 <tr><th>Condition</th><th class="n">Paper</th><th class="n">Run A (scene)</th><th class="n">Run B (tile)</th><th class="n">A−paper</th><th class="n">B−paper</th></tr>
-<tr><td>Original S2 imagery</td><td class="n">90.18%</td><td class="n good"><b>96.25%</b></td><td class="n">94.02%</td><td class="n good">+6.07</td><td class="n good">+3.84</td></tr>
-<tr><td>Thin cloud/shadow filtered</td><td class="n">98.97%</td><td class="n good"><b>99.76%</b></td><td class="n">97.52%</td><td class="n good">+0.79</td><td class="n bad">−1.45</td></tr>
+<tr><td>Original S2 imagery</td><td class="n">90.18%</td><td class="n good"><b>96.69%</b></td><td class="n">94.02%</td><td class="n good">+6.51</td><td class="n good">+3.84</td></tr>
+<tr><td>Thin cloud/shadow filtered</td><td class="n">98.97%</td><td class="n good"><b>99.97%</b></td><td class="n">97.52%</td><td class="n good">+1.00</td><td class="n bad">−1.45</td></tr>
 </table>
 <p>Both runs beat the paper on original imagery; Run A also beats it on filtered while Run B
-falls 1.45 pt short. Our edge over the paper traces to self-consistent auto-labels, the 63-scene
-subset, and unseeded init variance.</p>
-<div class="callout"><b>Read the orig row as a variance baseline, not a filter-scale result.</b>
-The filter only touches the <em>filtered</em> branch — the <b>original branch consumes
-byte-identical tiles in both runs</b> (same resize, split, seed-0 test split). So the 2.23 pt
-orig gap (96.25 vs 94.02) is <b>pure unseeded training variance</b>, not filter scale. The
-meaningful filter-scale comparison is the filtered row; even there a ~2 pt slice is variance of
-this magnitude — see <a href="#interp">§1A.6</a>.</div>
+falls 1.45 pt short. Our edge over the paper traces to self-consistent auto-labels and unseeded
+init variance; Run A now uses the authors' full 66-scene dataset, so it is no longer attributable
+to a reduced or resampled scene set.</p>
+<div class="callout"><b>Do not read the A–B orig gap as a filter-scale result.</b> While A and B
+shared a dataset, the orig branch fed both byte-identical tiles and its delta was pure training
+variance. <b>That no longer holds:</b> Run A is the authors' 66-scene / 4,224-tile set, Run B the
+legacy 63-scene / 4,032-tile resampled export, so the orig gap now mixes dataset with variance and
+isolates neither. Compare each run to the <b>paper</b> rather than to each other; for filter scale
+specifically, re-run the tile-filter variant on the authors' data — see
+<a href="#interp">§1A.6</a>.</div>
 
 <h3>1A.2 Table IV — precision / recall / F1 (micro-averaged, %)</h3>
 <table>
@@ -115,20 +125,21 @@ P/R/F1 are self-consistent.</p>
 <h3>1A.3 Table V — cloud/shadow-stratified accuracy</h3>
 <table>
 <tr><th>Stratum</th><th>Condition</th><th class="n">Paper</th><th class="n">Run A</th><th class="n">Run B</th></tr>
-<tr><td>≥10% cloud/shadow</td><td>original</td><td class="n">79.91%</td><td class="n">94.32%</td><td class="n">90.80%</td></tr>
-<tr><td>≥10% cloud/shadow</td><td>filtered</td><td class="n">99.28%</td><td class="n good">99.64%</td><td class="n good">99.66%</td></tr>
-<tr><td>&lt;10% cloud/shadow</td><td>original</td><td class="n">93.60%</td><td class="n">97.67%</td><td class="n">95.10%*</td></tr>
-<tr><td>&lt;10% cloud/shadow</td><td>filtered</td><td class="n">98.87%</td><td class="n good">99.86%</td><td class="n good">99.92%*</td></tr>
+<tr><td>≥10% cloud/shadow</td><td>original</td><td class="n">79.91%</td><td class="n">95.31%</td><td class="n">90.80%</td></tr>
+<tr><td>≥10% cloud/shadow</td><td>filtered</td><td class="n">99.28%</td><td class="n good">99.95%</td><td class="n good">99.66%</td></tr>
+<tr><td>&lt;10% cloud/shadow</td><td>original</td><td class="n">93.60%</td><td class="n">97.62%</td><td class="n">95.10%*</td></tr>
+<tr><td>&lt;10% cloud/shadow</td><td>filtered</td><td class="n">98.87%</td><td class="n good">99.98%</td><td class="n good">99.92%*</td></tr>
 </table>
 <p class="meta">⚠️ <b>Run B's low-cloud rows (*) are biased HIGH (in-DAG, pre-fix).</b> They exclude
 127 zero-cloud tiles dropped by a now-fixed <code>frac or -1.0</code> bug. Those tiles turn out to
 be exactly where Run B's per-tile filter <em>fails</em> (thin→thick; see §1A.4/§1A.6), so excluding
-them <b>inflates</b> Run B's filtered low-cloud from a true ~95.9% to the 99.92% shown. The
-<b>high-cloud rows use the identical 343 tiles in both runs and are directly comparable</b>; Run A
-stratifies all 807 tiles.</p>
+them <b>inflates</b> Run B's filtered low-cloud from a true ~95.9% to the 99.92% shown.
+<b>The two runs no longer share a test set</b> (different datasets), so the high-cloud rows are
+not tile-for-tile comparable either; Run A stratifies all <b>845</b> tiles (340 high / 505 low),
+none dropped.</p>
 <p><b>Key divergence from the paper:</b> the paper's largest filter benefit is on ≥10%-cloud
 <em>original</em> imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy is already
-high (Run A 94.32%), so our filter gain there is only ~5 pt — likely because our auto-labels are
+high (Run A 95.31%), so our filter gain there is only ~5 pt — likely because our auto-labels are
 self-consistent with the cloudy input, so the model fits cloudy raw tiles better than the paper's
 pipeline did.</p>
 
@@ -226,10 +237,11 @@ claim, with effort estimates. The regenerable markdown twin of this whole sectio
 
 <h3 id="interp">1A.6 Interpreting Run A vs Run B — variance vs. filter scale</h3>
 <ul>
-<li><b>Original branch = variance baseline.</b> A and B feed the orig branch identical tiles, so
-its gaps are pure unseeded training variance: overall accuracy 96.25 vs 94.02 (2.2 pt) and
-thin-ice recall swings ~12 pt (Run A &lt;10% 84.8% vs Run B 72.8%). Treat any single-run gap of
-this size as noise.</li>
+<li><b>Original branch is no longer a clean variance baseline.</b> It was one while A and B
+shared a dataset; now that Run A uses the authors' 66 scenes and Run B the legacy 63-scene export,
+the orig delta confounds dataset with unseeded training variance. Historically this baseline
+measured ~2 pt of run-to-run noise in overall accuracy and ~12 pt in thin-ice recall, so gaps of
+that order still should not be over-read.</li>
 <li><b>Filtered branch = the real filter-scale comparison.</b> Here the gap is larger than the
 variance baseline and concentrated in <b>thin ice</b>: Run A (scene filter) holds thin-ice recall at
 <b class="good">99.8%</b> overall, while Run B (per-tile filter) drops to <b class="bad">81.1%</b>
@@ -252,9 +264,11 @@ per-stratum PNGs (thin recall ~98%) flattered it. The §1A.4 matrices use the co
 <tr class="hi"><td><b>run0009</b></td><td><b>both-paths (Option A)</b></td><td>orig + filtered with <b>self-consistent filtered labels</b> (paper-faithful)</td><td class="good">Success</td></tr>
 <tr><td>pegasus2-run0001</td><td>both-paths + infer + stratified (distributed)</td><td>Full pipeline on native 2000² scenes (zero-padded), 14,317 jobs on multi-site GPU pool</td><td class="good">Success (after 2 in-flight fixes)</td></tr>
 <tr class="hi"><td><b>pegasus2-run0002</b></td><td><b>Run A — paper-default (scene filter, resized 2048²)</b></td><td>Scenes resized to 2048² (no padding) + mask-pad fix + correct class colours. 14,317 jobs. Stratified eval recovered post-run via surgical replay (cloud-fraction key bug, now fixed in-code).</td><td class="good">Success (stratified recovered)</td></tr>
-<tr class="hi"><td><b>pegasus2-run0003</b></td><td><b>Run B — per-tile filter variant</b></td><td>Identical to Run A but <code>--filter-scale tile</code> (4,032 per-tile filter jobs, kernel 19). 14,385 jobs, fully clean — stratified eval ran in-DAG (cloud-fraction fix held). Low-cloud stratified later recomputed on all 807 tiles for the zero-cloud bug.</td><td class="good">Success</td></tr>
+<tr class="hi"><td><b>pegasus2-run0003</b></td><td><b>Run B — per-tile filter variant</b></td><td>Identical to pegasus2-run0002 but <code>--filter-scale tile</code> (4,032 per-tile filter jobs, kernel 19). 14,385 jobs, fully clean — stratified eval ran in-DAG (cloud-fraction fix held). Low-cloud stratified later recomputed on all 807 tiles for the zero-cloud bug.</td><td class="good">Success</td></tr>
+<tr class="hi"><td><b>run0003</b><br>(2026-09-18)</td><td><b>Run A — paper-default on the authors' 66-scene dataset</b></td><td><b>First run on the authors' own data</b>: 66 native-2048² scenes, no resampling (<code>--scene-size 0</code>), the paper's full 4,224 tiles. 300 DAG nodes after <code>--cluster label</code> (9,052 unclustered), container supplied as a pre-built local SIF. <b>0 failures, 0 held.</b></td><td class="good">Success</td></tr>
 </table>
-<p><span class="pill">63 scenes · 2048² · 4032 tiles of 256² · 50 epochs · batch 32 · Adam · 3 classes · random_state=0</span></p>
+<p><span class="pill">Run A: 66 scenes · native 2048² · 4,224 tiles of 256² · 3,379 train / 845 test · 50 epochs · batch 32 · Adam · 3 classes · random_state=0</span></p>
+<p><span class="pill">legacy runs: 63 scenes · resampled 2048² · 4,032 tiles</span></p>
 <p>run0009 was produced by the updated <code>workflow_generator.py</code> whose default now
 derives the filtered branch's labels by color-segmenting the <em>filtered</em> tiles
 (Option A), so input and target are self-consistent. Pass <code>--filtered-labels raw</code>

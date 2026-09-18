@@ -40,3 +40,6 @@ workflow.yml
 data/
 *.npy
 *.hdf5
+
+# Fetched evaluation JSONs from remote runs (regenerate with scp from the run host)
+output_run0003_authors/

@@ -289,16 +289,16 @@ def render_comprehensive(run_a: dict, run_b: dict,
       "All comparisons are against the paper's **U-Net-Auto** column; the "
       "manually-labeled **U-Net-Man** results are out of scope (see §0.5).")
     A("")
-    A("> **Which dataset these runs used.** Runs A and B predate the authors' "
-      "data release. They ran on a **63-scene Google Earth Engine export** "
-      "(`s2_vis_56/57/64` were missing), exported at 2000x2000 and resized "
-      "in-DAG to 2048x2048 — so every tile was resampled. The paper's dataset "
-      "is **66 scenes / 4,224 tiles**, which the authors have since supplied "
-      "natively at 2048x2048 (`s2_original_2048/`); the workflow now runs it "
-      "with no resampling at all. **The numbers below are therefore a "
-      "reproduction on near-but-not-identical data.** A run on the authors' "
-      "scenes is the outstanding item — until then, read every delta in this "
-      "report as carrying that caveat.")
+    A("> **Which dataset each run used.** **Run A is the canonical reproduction: "
+      "the authors' own 66 scenes**, supplied directly and natively 2048x2048, "
+      "tiled into the paper's full 66 x 64 = **4,224 tiles** (3,379 train / 845 "
+      "test) with no resampling at any stage. **Run B predates that data "
+      "release** — it ran on a 63-scene Google Earth Engine export "
+      "(`s2_vis_56/57/64` missing) shipped at 2000x2000 and resized in-DAG to "
+      "2048x2048, so every tile was resampled. Run B therefore differs from "
+      "Run A in **two** respects at once, filter scale *and* dataset; do not "
+      "read the A-B delta as a clean filter-scale result. The A-vs-paper "
+      "comparison is the one to trust.")
     A("")
 
     # 0.1 Table IV
@@ -320,16 +320,18 @@ def render_comprehensive(run_a: dict, run_b: dict,
     A("Both runs **exceed** the paper on original imagery; Run A also exceeds it on "
       "filtered while Run B falls 1.45 pt short. Our edge over the paper traces to "
       "self-consistent auto-labels (color-segmentation of the same tile the U-Net "
-      "sees), the 63-scene resampled export these runs used (see the note in "
-      "\u00a70), and unseeded init variance.")
+      "sees) and unseeded init variance. Run A uses the authors' full 66-scene "
+      "dataset (see the note in \u00a70), so the gap is no longer attributable to a "
+      "reduced or resampled scene set.")
     A("")
-    A("> **Read the orig row as a variance baseline, not a filter-scale result.** "
-      "The thin-cloud/shadow filter only touches the *filtered* branch — the "
-      "**original branch consumes byte-identical tiles in both runs** (same resize, "
-      "split, and seed-0 test split). So the 2.23 pt orig gap (96.25 vs 94.02) is "
-      "**pure unseeded training variance**, not an effect of filter scale. The "
-      "meaningful filter-scale comparison is the *filtered* row, and even there a "
-      "~2 pt slice is variance of this magnitude — see §0.6.")
+    A("> **Do not read the A-B orig gap as a filter-scale result.** In earlier "
+      "revisions of this report A and B shared a dataset, so the orig branch fed "
+      "both runs byte-identical tiles and its delta was pure training variance. "
+      "**That no longer holds:** Run A is the authors' 66-scene / 4,224-tile set "
+      "and Run B the legacy 63-scene / 4,032-tile resampled export, so the orig "
+      "gap now mixes dataset and variance and isolates neither. Compare each run "
+      "to the **paper** rather than to each other; for filter scale specifically, "
+      "re-run the tile-filter variant on the authors' data.")
     A("")
 
     # 0.2 Table IV P/R/F1
@@ -373,19 +375,31 @@ def render_comprehensive(run_a: dict, run_b: dict,
     da = run_a["strat"]["orig"]
     db = run_b["strat"]["orig"]
     dropped_a = da.get("dropped_no_fraction") if da else None
+
+    # Derived from the run itself so the prose cannot drift from the tables.
+    def _strat_n(d):
+        if not d:
+            return None
+        return sum(d[k].get("n_tiles", 0) for k in ("high_cloud", "low_cloud")
+                   if isinstance(d.get(k), dict)) or None
+    n_test_a = _strat_n(da) or "all"
+    _hi = da.get("high_cloud") if da else None
+    hi_a_orig = (f"{_hi['test_accuracy'] * 100:.2f}%"
+                 if _hi and "test_accuracy" in _hi else "—")
     dropped_b = db.get("dropped_no_fraction") if db else None
     A(f"> ⚠️ **Run B's low-cloud row is biased HIGH (in-DAG, pre-fix).** Run A "
-      f"stratifies all 807 test tiles (dropped={dropped_a}); Run B's in-DAG eval "
+      f"stratifies all {n_test_a} test tiles (dropped={dropped_a}); Run B's in-DAG eval "
       f"dropped {dropped_b} zero-cloud tiles (the `frac or -1.0` bug — clear tiles "
       "read as missing). Those tiles turn out to be exactly where Run B's per-tile "
       "filter *fails* (thin ice → thick; see §0.4/§0.6), so excluding them **inflates** "
-      "Run B's filtered low-cloud from a true ~95.9% to the 99.92% shown. The "
-      "**high-cloud rows use the identical 343 tiles in both runs and are directly "
-      "comparable**; for the corrected low-cloud picture use the full matrices in §0.4.")
+      "Run B's filtered low-cloud from a true ~95.9% to the 99.92% shown. "
+      "**The two runs no longer share a test set** (different datasets), so the "
+      "high-cloud rows are not tile-for-tile comparable either; for the corrected "
+      "low-cloud picture use the full matrices in §0.4.")
     A("")
     A("**Key divergence from the paper:** the paper's biggest filter benefit is on "
       "≥10%-cloud *original* imagery (79.91% → 99.28%, +19 pt). Our original "
-      "high-cloud accuracy is already high (Run A 94.32%), so our filter gain there "
+      f"high-cloud accuracy is already high (Run A {hi_a_orig}), so our filter gain there "
       "is much smaller (+~5 pt). Likely because our auto-labels are self-consistent "
       "with the (cloudy) input, so the model fits cloudy raw tiles better than the "
       "paper's pipeline did.")
@@ -397,7 +411,7 @@ def render_comprehensive(run_a: dict, run_b: dict,
     A("Row-normalized (%), rows = true class, cols = predicted; order thin / thick / "
       "water. The **diagonal is per-class recall**; off-diagonals are the "
       "cloud-shadow-induced confusion that the paper highlights. Our matrices are "
-      "computed on all 807 test tiles (Run A recomputed from its preserved scratch; "
+      f"computed on each run's full test set ({n_test_a} tiles for Run A; "
       "Run B's orig recomputed, its filtered reconstructed from the run's "
       "confusion-count outputs — predictions were cleaned on success).")
     A("")
@@ -466,11 +480,12 @@ def render_comprehensive(run_a: dict, run_b: dict,
     # 0.6 Interpreting the A-vs-B differences
     A("### 0.6 Interpreting Run A vs Run B (variance vs. filter scale)")
     A("")
-    A("- **Original branch = variance baseline.** A and B feed the orig branch "
-      "identical tiles, so its differences are entirely unseeded training variance: "
-      "overall accuracy 96.25 vs 94.02 (2.2 pt), and thin-ice recall swings ~12 pt "
-      "(Run A low-cloud 84.9% vs Run B 72.8%). Treat any single-run gap of this size "
-      "as noise.")
+    A("- **Original branch is no longer a clean variance baseline.** It was one "
+      "while A and B shared a dataset; now that Run A uses the authors' 66 scenes "
+      "and Run B the legacy 63-scene export, the orig delta confounds dataset with "
+      "unseeded training variance. Historically this baseline measured ~2 pt of "
+      "run-to-run noise in overall accuracy and ~12 pt in thin-ice recall, so gaps "
+      "of that order still should not be over-read.")
     A("- **Filtered branch = the real filter-scale comparison.** Here the difference "
       "is larger than the variance baseline and concentrated in **thin ice**: Run A "
       "(scene filter) holds thin-ice recall at **99.8%** overall, while Run B "

@@ -559,18 +559,26 @@ so the difference can be measured:
 Gaps that are *not* yet covered are tracked in `gap_analysis.md` (most notably §2.1 SSIM,
 §2.2 U-Net-Man manual-label baseline, and the Spark map-reduce auto-labeling speedup).
 
-**Latest reproduction results** (pegasus2-run0002, 2026-06-13 — full Run A on a
-distributed multi-site GPU pool, 14,317 jobs, paper-default config):
+**Latest reproduction results** (run0003, 2026-09-18 — the first run on the authors'
+own 66-scene dataset: native 2048x2048, no resampling, the paper's full 4,224 tiles
+(3,379 train / 845 test); 300 clustered DAG nodes, 0 failures, 0 held):
 
 | Condition | Paper (U-Net-Auto) | Ours | Δ |
 |---|:--:|:--:|:--:|
-| Original S2 imagery | 90.18% | **96.25%** | +6.07 pt |
-| Thin cloud / shadow filtered | 98.97% | **99.76%** | +0.79 pt |
+| Original S2 imagery | 90.18% | **96.69%** | +6.51 pt |
+| Thin cloud / shadow filtered | 98.97% | **99.97%** | +1.00 pt |
 
-Cloud-stratified (Table V): orig 94.32% high-cloud / 97.67% low-cloud; filtered
-99.64% / 99.86%. The 2048 resize (default) eliminates the padding-class artifact that
-capped the earlier run0001 at 91.21% orig. See `comparison_report.md` (figure-by-figure,
-auto-generated) and `comparison_report.html` (long-form discussion) for details.
+Cloud-stratified (Table V): orig 95.31% high-cloud / 97.62% low-cloud; filtered
+99.95% / 99.98%, all 845 test tiles stratified with none dropped.
+
+The informative part is how *little* moved: the previous canonical run scored
+96.25% / 99.76% on a 63-scene GEE export resampled 2000→2048, so the authors' true
+pixels and the three extra scenes shift the headline by well under a point — the earlier
+numbers were not an artifact of the incomplete export. The standing caveat also survives:
+the ~6.5 pt edge on orig reflects self-consistent auto-labels (the U-Net is scored against
+labels derived from the tiles it sees), not a better reproduction. See
+`comparison_report.md` (figure-by-figure, auto-generated) and `comparison_report.html`
+(long-form discussion) for details.
 
 ### Run A — paper Table IV + V + Fig 13 + Fig 14 (single submission)
 
@@ -617,13 +625,20 @@ Use Run B's filtered-branch numbers as a control for the "what if we filter per 
 counterfactual. Run B does **not** produce per-scene `filtered_s2_vis_*.png` — there is no
 full-scene filter pass; only filtered training tiles exist.
 
-**Result (pegasus2-run0003, 2026-06-15):** scene-scale filtering (Run A) beats per-tile
-(Run B) by ~2.2 pt on both Table IV conditions — orig 96.25% (A) vs 94.02% (B), filtered
-99.76% (A) vs 97.52% (B) — with the gap concentrated in thin-ice recall (the per-tile
-filter lacks scene context). The paper's described scene-scale config is therefore both
-canonical and better. The full claim-by-claim comparison of **both runs vs the paper** —
-including the complete Fig 13 confusion matrices and a variance-vs-filter-scale analysis —
-is consolidated in `comparison_report.md` §0 (and `comparison_report.html` §1A).
+**Result (pegasus2-run0002 vs pegasus2-run0003, 2026-06-15):** on the *same* 63-scene
+export, scene-scale filtering beat per-tile by ~2.2 pt on both Table IV conditions — orig
+96.25% vs 94.02%, filtered 99.76% vs 97.52% — with the gap concentrated in thin-ice recall
+(the per-tile filter lacks scene context). The paper's described scene-scale config is
+therefore both canonical and better.
+
+> **This comparison has not been repeated on the authors' data.** The current canonical run
+> (run0003, 66 scenes) is scene-scale only, so the report's Run A vs Run B delta now differs
+> in dataset *and* filter scale and isolates neither. Re-running `--filter-scale tile` on
+> `data/s2_original_2048/` would restore it as a clean control.
+
+The full claim-by-claim comparison of **both runs vs the paper** — including the complete
+Fig 13 confusion matrices — is consolidated in `comparison_report.md` §0 (and
+`comparison_report.html` §1A).
 
 ### Run C — paper Fig 12 distributed-training scaling sweep
 
