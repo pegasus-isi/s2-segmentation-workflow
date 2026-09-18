@@ -264,7 +264,7 @@ python download_data.py --project ee-yourproject \
 
 `download_data.py` now exports at 2048×2048 to match the paper's scene geometry.
 
-> **Note**: With auto-labeling (the default), **no separate training data directories are needed**. The workflow produces everything within the DAG: scenes are resized to 2048×2048 (`resize_image`), `split_images` jobs tile each scene into 256×256 grayscale training images, and `split_masks` jobs tile the Stage 1 segmentation masks into matching 256×256 grayscale labels. Both use the same grid so image/mask counts always match, and 2048 divides evenly by 256 so no padding enters the labels. (With `--scene-size 0`, edge tiles are padded — masks with the open-water gray value 149, never zero — so padding cannot become a phantom label class; the zero-padding artifact that cost ~3.5 pt in pegasus2-run0001 is documented in `comparison_report.html` §7.1.) This is the auto-labeling approach described in the paper. If you have external ground-truth data, pass `--no-auto-label` with `--train-images-dir`/`--train-masks-dir`.
+> **Note**: With auto-labeling (the default), **no separate training data directories are needed**. The workflow produces everything within the DAG: scenes are resized to 2048×2048 (`resize_image`), `split_images` jobs tile each scene into 256×256 grayscale training images, and `split_masks` jobs tile the Stage 1 segmentation masks into matching 256×256 grayscale labels. Both use the same grid so image/mask counts always match, and 2048 divides evenly by 256 so no padding enters the labels. (With `--scene-size 0`, edge tiles are padded — masks with the open-water gray value 149, never zero — so padding cannot become a phantom label class; the zero-padding artifact that cost ~3.5 pt in an early run is documented in the workflow history.) This is the auto-labeling approach described in the paper. If you have external ground-truth data, pass `--no-auto-label` with `--train-images-dir`/`--train-masks-dir`.
 
 ### Using Synthetic Test Data
 
@@ -343,7 +343,7 @@ python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
 
 # Honest cross-comparison: filtered inputs + raw-scene labels
 # (yields ~90%, exposing that the paper's 98.97% requires
-# label-consistency — see comparison_report.html §4)
+# label-consistency — see comparison_report.html §3)
 python workflow_generator.py --images data/s2_original_2048/s2_vis_*.png \
     --scene-size 0 \
     --paths filtered --filtered-labels raw --output workflow.yml
@@ -693,15 +693,25 @@ batch_size / samples_per_epoch / epochs) plus `epoch_time_seconds` and
 
 ### Side-by-side comparison report
 
-Once Run A finishes, regenerate the figure-by-figure paper comparison:
+Once a run finishes, regenerate the paper comparison:
 
 ```bash
-python compare_with_paper.py
+python compare_with_paper.py --run-dir output --run-label "<run name>"
 ```
 
-This extracts Fig 3 / 4 / 5 / 11 / 13 / 14 / Table IV from the paper PDF, pairs them
-with the matching run outputs from `output/`, and emits `comparison_report.md` with
-side-by-side images and the headline-metric delta table.
+The report is a straight **paper vs. ours** comparison — one run, no cross-run columns:
+
+- **Numbers** — Table IV accuracy and P/R/F1, Table V cloud-stratified accuracy, and
+  Fig 13 per-class recall, each as `Paper | Ours | Δ`.
+- **Images** — each paper figure cropped from the PDF and placed directly beside the
+  matching run output: filter output (Fig 5), confusion matrices (Fig 13), prediction
+  samples (Fig 14), whole-scene inference (Fig 9), and the metrics table (Table IV).
+- **Coverage** — an explicit table of which paper claims are compared, which are only
+  qualitative, and which cannot be reproduced at all (anything needing the manually
+  labeled U-Net-Man column).
+
+Every number is read from the run's own JSON outputs, so the prose cannot drift from
+the tables. `comparison_report.html` is the hand-maintained long-form companion.
 
 ### What this reproduces vs. what is still a gap
 

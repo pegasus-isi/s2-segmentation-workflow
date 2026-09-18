@@ -163,7 +163,7 @@ The original scripts this workflow was decomposed from live in the sibling
   - `--pad --pad-value 149` (open-water value, so any padding is absorbed into the water class rather than a phantom 4th class)
 - **Dependencies**: `image_merge` for the same source image.
 
-> **Tile count matching**: At the default `--scene-size 2048`, scenes divide evenly into 8×8 = **64 tiles** with **no padding** — `--pad` is a no-op. With `--scene-size 0` (native 2000²), `--pad` fills the edge tiles (masks at value 149) so both `split_images` and `split_masks` still produce exactly 64 tiles per scene and image/mask counts match for `preprocess_data`. The padding-as-phantom-class bug this avoids is documented in `comparison_report.html` §7.
+> **Tile count matching**: At the default `--scene-size 2048`, scenes divide evenly into 8×8 = **64 tiles** with **no padding** — `--pad` is a no-op. With `--scene-size 0` (native 2000²), `--pad` fills the edge tiles (masks at value 149) so both `split_images` and `split_masks` still produce exactly 64 tiles per scene and image/mask counts match for `preprocess_data`. The padding-as-phantom-class bug this avoids was observed in an early distributed run.
 
 #### Job 3d — `filter_image` (auto-label mode, filtered path)
 

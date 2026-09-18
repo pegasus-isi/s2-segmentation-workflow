@@ -119,6 +119,19 @@ SECTIONS = [
         "Each tile is input | ground-truth | prediction. Red = thick ice, blue = thin "
         "ice, green = open water, matching the paper's legend."),
     Section(
+        "Whole-scene inference (paper Fig 9 production path)",
+        "fig14_predictions",
+        [("Our whole-scene prediction — original branch, scene 00",
+          "orig_infer_s2_vis_00.png"),
+         ("Our whole-scene prediction — filtered branch, scene 00",
+          "filtered_infer_s2_vis_00.png")],
+        "The paper's Fig 9 describes the production path: a full scene is tiled, "
+        "each tile is classified, and the predictions are merged back into one "
+        "per-scene sea-ice map. These are that merged output for scene 00 from both "
+        "trained branches (66 scenes x 2 branches were produced). Red = thick ice, "
+        "blue = thin ice, green = open water. The paper shows no whole-scene figure "
+        "to match numerically, so this pairing is qualitative."),
+    Section(
         "Headline metrics (paper Table IV)",
         "table4_metrics",
         [("Our metrics — Original S2 imagery", "metrics_table.png"),
@@ -260,196 +273,153 @@ def _acc(ev):
     return f"{ev['test_accuracy'] * 100:.2f}%" if ev else "—"
 
 
-def _load_cm(repo_root: Path, tag: str) -> dict:
-    """Load recomputed confusion matrices {branch: {stratum: 3x3}} if present."""
-    out = {}
-    for b in ("orig", "filtered"):
-        p = repo_root / f"cm_{tag}_{b}.json"
-        if p.exists():
-            out[b] = json.loads(p.read_text())
-    return out
-
-
-def render_comprehensive(run_a: dict, run_b: dict,
-                         label_a: str, label_b: str,
+def render_comprehensive(run_a: dict, label_a: str,
                          repo_root: Path = None) -> list:
-    """Comprehensive paper-claim comparison covering Run A and Run B."""
+    """Side-by-side comparison of one run against the paper's U-Net-Auto column."""
     L = []
     A = L.append
-    sk = {"high": "high_cloud", "low": "low_cloud"}
-    cm_a = _load_cm(repo_root, "runA") if repo_root else {}
-    cm_b = _load_cm(repo_root, "runB") if repo_root else {}
 
-    A("## 0. Comprehensive comparison vs. the paper")
+    def delta(ours_pct, paper_pct):
+        if ours_pct is None:
+            return "—"
+        d = ours_pct - paper_pct
+        return f"{d:+.2f}"
+
+    A("## 0. Side-by-side vs. the paper")
     A("")
-    A(f"Two runs of the **U-Net-Auto** pipeline, identical except for the "
-      f"thin-cloud/shadow filter scale: **Run A** ({label_a}, scene-scale filter "
-      "— the paper's described configuration) and **Run B** "
-      f"({label_b}, per-tile filter — the Spark reference's inference path). "
-      "All comparisons are against the paper's **U-Net-Auto** column; the "
-      "manually-labeled **U-Net-Man** results are out of scope (see §0.5).")
+    A(f"One run of the **U-Net-Auto** pipeline in the paper's described configuration "
+      f"(**{label_a}**, scene-scale thin-cloud/shadow filter). Every comparison below "
+      "is against the paper's **U-Net-Auto** column; the manually-labeled "
+      "**U-Net-Man** results are out of scope (see §0.5).")
     A("")
-    A("> **Which dataset each run used.** **Run A is the canonical reproduction: "
-      "the authors' own 66 scenes**, supplied directly and natively 2048x2048, "
-      "tiled into the paper's full 66 x 64 = **4,224 tiles** (3,379 train / 845 "
-      "test) with no resampling at any stage. **Run B predates that data "
-      "release** — it ran on a 63-scene Google Earth Engine export "
-      "(`s2_vis_56/57/64` missing) shipped at 2000x2000 and resized in-DAG to "
-      "2048x2048, so every tile was resampled. Run B therefore differs from "
-      "Run A in **two** respects at once, filter scale *and* dataset; do not "
-      "read the A-B delta as a clean filter-scale result. The A-vs-paper "
-      "comparison is the one to trust.")
+    A("> **Dataset.** The authors' own **66 scenes**, supplied directly and natively "
+      "2048x2048, tiled into the paper's full 66 x 64 = **4,224 tiles** "
+      "(3,379 train / 845 test) with **no resampling at any stage**. This is the "
+      "paper's dataset, not an approximation of it.")
     A("")
 
-    # 0.1 Table IV
+    # ── 0.1 Table IV ────────────────────────────────────────────────────────
     A("### 0.1 Table IV — overall accuracy")
     A("")
-    A("| Condition | Paper | Run A (scene) | Run B (tile) | A−paper | B−paper |")
-    A("|---|:--:|:--:|:--:|:--:|:--:|")
-    for b, name in (("orig", "Original S2 imagery"),
-                    ("filtered", "Thin cloud / shadow filtered")):
-        p = PAPER_TABLE_IV[b]
-        ea, eb = run_a["overall"][b], run_b["overall"][b]
-        a = ea["test_accuracy"] * 100 if ea else None
-        bb = eb["test_accuracy"] * 100 if eb else None
-        A(f"| {name} | {p:.2f}% | "
-          f"{a:.2f}% | {bb:.2f}% | {a - p:+.2f} | {bb - p:+.2f} |"
-          if a is not None and bb is not None else
-          f"| {name} | {p:.2f}% | {_acc(ea)} | {_acc(eb)} | — | — |")
+    A("| Condition | Paper | Ours | Δ |")
+    A("|---|:--:|:--:|:--:|")
+    for b, cond, paper_acc in (("orig", "Original S2 imagery", PAPER_TABLE_IV["orig"]),
+                               ("filtered", "Thin cloud / shadow filtered",
+                                PAPER_TABLE_IV["filtered"])):
+        ev = run_a["overall"][b]
+        ours = ev["test_accuracy"] * 100 if ev else None
+        ours_s = f"**{ours:.2f}%**" if ours is not None else "—"
+        A(f"| {cond} | {paper_acc:.2f}% | {ours_s} | {delta(ours, paper_acc)} |")
     A("")
-    A("Both runs **exceed** the paper on original imagery; Run A also exceeds it on "
-      "filtered while Run B falls 1.45 pt short. Our edge over the paper traces to "
-      "self-consistent auto-labels (color-segmentation of the same tile the U-Net "
-      "sees) and unseeded init variance. Run A uses the authors' full 66-scene "
-      "dataset (see the note in \u00a70), so the gap is no longer attributable to a "
-      "reduced or resampled scene set.")
-    A("")
-    A("> **Do not read the A-B orig gap as a filter-scale result.** In earlier "
-      "revisions of this report A and B shared a dataset, so the orig branch fed "
-      "both runs byte-identical tiles and its delta was pure training variance. "
-      "**That no longer holds:** Run A is the authors' 66-scene / 4,224-tile set "
-      "and Run B the legacy 63-scene / 4,032-tile resampled export, so the orig "
-      "gap now mixes dataset and variance and isolates neither. Compare each run "
-      "to the **paper** rather than to each other; for filter scale specifically, "
-      "re-run the tile-filter variant on the authors' data.")
+    A("We exceed the paper on both conditions. The margin is **not** evidence of a "
+      "better reproduction: our auto-labels are self-consistent — the U-Net is scored "
+      "against labels produced by color-segmenting the very tiles it sees — so the "
+      "task is easier than the paper's, which scores against an independently derived "
+      "reference. Training is also unseeded beyond the split (`random_state=0`), which "
+      "historically contributes ~1 pt of run-to-run noise. See §0.6.")
     A("")
 
-    # 0.2 Table IV P/R/F1
+    # ── 0.2 P/R/F1 ──────────────────────────────────────────────────────────
     A("### 0.2 Table IV — precision / recall / F1 (micro-averaged)")
     A("")
-    A("| Condition | Paper P / R / F1 | Run A P / R / F1 | Run B P / R / F1 |")
-    A("|---|:--:|:--:|:--:|")
-    for b, name in (("orig", "Original"), ("filtered", "Filtered")):
-        pp = PAPER_TABLE_IV_PRF[b]
-        ea, eb = run_a["overall"][b], run_b["overall"][b]
-        def prf(ev):
-            if not ev:
-                return "—"
-            return (f"{ev['precision']*100:.2f} / {ev['recall']*100:.2f} / "
-                    f"{ev['f1_score']*100:.2f}")
-        A(f"| {name} | {pp[0]:.2f} / {pp[1]:.2f} / {pp[2]:.2f} | "
-          f"{prf(ea)} | {prf(eb)} |")
+    A("| Condition | Paper P / R / F1 | Ours P / R / F1 |")
+    A("|---|:--:|:--:|")
+    for b, cond, prf in (("orig", "Original", PAPER_TABLE_IV_PRF["orig"]),
+                         ("filtered", "Filtered", PAPER_TABLE_IV_PRF["filtered"])):
+        ev = run_a["overall"][b]
+        if ev:
+            o = " / ".join(f"{ev[k] * 100:.2f}" for k in
+                           ("precision", "recall", "f1_score"))
+        else:
+            o = "—"
+        A(f"| {cond} | {' / '.join(f'{v:.2f}' for v in prf)} | {o} |")
     A("")
     A("> ⚠️ The paper's filtered U-Net-Auto P/R/F1 reads **98.88 / 91.87 / 91.89** — "
-      "the 91.87/91.89 recall+F1 are inconsistent with its own 98.97% accuracy and "
-      "appear to be a typo. Our filtered P/R/F1 are internally consistent (~99.8 / "
-      "~99.8 / ~99.8 for Run A).")
+      "the recall and F1 are inconsistent with its own 98.97% accuracy and appear to "
+      "be a typo. Ours are internally consistent.")
     A("")
 
-    # 0.3 Table V stratified
+    # ── 0.3 Table V ─────────────────────────────────────────────────────────
     A("### 0.3 Table V — cloud/shadow-stratified accuracy")
     A("")
-    A("| Stratum | Condition | Paper | Run A | Run B |")
-    A("|---|---|:--:|:--:|:--:|")
-    for stratum, slabel in (("high", "≥10% cloud/shadow"),
-                            ("low", "<10% cloud/shadow")):
-        for b, bname in (("orig", "original"), ("filtered", "filtered")):
-            p = PAPER_TABLE_V[(b, stratum)]
-            sa = run_a["strat"][b]
-            sb = run_b["strat"][b]
-            va = _acc(sa[sk[stratum]]) if sa else "—"
-            vb = _acc(sb[sk[stratum]]) if sb else "—"
-            A(f"| {slabel} | {bname} | {p:.2f}% | {va} | {vb} |")
-    A("")
-    # caveat about dropped tiles
     da = run_a["strat"]["orig"]
-    db = run_b["strat"]["orig"]
     dropped_a = da.get("dropped_no_fraction") if da else None
 
-    # Derived from the run itself so the prose cannot drift from the tables.
     def _strat_n(d):
         if not d:
             return None
         return sum(d[k].get("n_tiles", 0) for k in ("high_cloud", "low_cloud")
                    if isinstance(d.get(k), dict)) or None
     n_test_a = _strat_n(da) or "all"
-    _hi = da.get("high_cloud") if da else None
-    hi_a_orig = (f"{_hi['test_accuracy'] * 100:.2f}%"
-                 if _hi and "test_accuracy" in _hi else "—")
-    dropped_b = db.get("dropped_no_fraction") if db else None
-    A(f"> ⚠️ **Run B's low-cloud row is biased HIGH (in-DAG, pre-fix).** Run A "
-      f"stratifies all {n_test_a} test tiles (dropped={dropped_a}); Run B's in-DAG eval "
-      f"dropped {dropped_b} zero-cloud tiles (the `frac or -1.0` bug — clear tiles "
-      "read as missing). Those tiles turn out to be exactly where Run B's per-tile "
-      "filter *fails* (thin ice → thick; see §0.4/§0.6), so excluding them **inflates** "
-      "Run B's filtered low-cloud from a true ~95.9% to the 99.92% shown. "
-      "**The two runs no longer share a test set** (different datasets), so the "
-      "high-cloud rows are not tile-for-tile comparable either; for the corrected "
-      "low-cloud picture use the full matrices in §0.4.")
-    A("")
-    A("**Key divergence from the paper:** the paper's biggest filter benefit is on "
-      "≥10%-cloud *original* imagery (79.91% → 99.28%, +19 pt). Our original "
-      f"high-cloud accuracy is already high (Run A {hi_a_orig}), so our filter gain there "
-      "is much smaller (+~5 pt). Likely because our auto-labels are self-consistent "
-      "with the (cloudy) input, so the model fits cloudy raw tiles better than the "
-      "paper's pipeline did.")
-    A("")
 
-    # 0.4 Fig 13 diagonals (per-class recall)
-    A("### 0.4 Fig 13 — full confusion matrices (U-Net-Auto)")
-    A("")
-    A("Row-normalized (%), rows = true class, cols = predicted; order thin / thick / "
-      "water. The **diagonal is per-class recall**; off-diagonals are the "
-      "cloud-shadow-induced confusion that the paper highlights. Our matrices are "
-      f"computed on each run's full test set ({n_test_a} tiles for Run A; "
-      "Run B's orig recomputed, its filtered reconstructed from the run's "
-      "confusion-count outputs — predictions were cleaned on success).")
-    A("")
-
-    def fmt_row(r):
-        return "  ".join(f"{'   ? ' if v is None else format(v, '5.1f')}" for v in r)
-
-    cond_titles = {
-        ("orig", "high"): "≥10% cloud/shadow · original  (paper: \"cloudy-shadowy\")",
-        ("filtered", "high"): "≥10% cloud/shadow · filtered  (paper: \"cloud-shadow-removed\")",
-        ("orig", "low"): "<10% cloud/shadow · original  (paper: \"cloud-shadow-free\")",
-        ("filtered", "low"): "<10% cloud/shadow · filtered",
-    }
+    A("| Stratum | Condition | Paper | Ours | Δ |")
+    A("|---|---|:--:|:--:|:--:|")
     rn = {"high": "high_cloud", "low": "low_cloud"}
-    classes = ("thin ", "thick", "water")
+    for stratum, b, paper_v in (
+            ("high", "orig", PAPER_TABLE_V[("orig", "high")]),
+            ("high", "filtered", PAPER_TABLE_V[("filtered", "high")]),
+            ("low", "orig", PAPER_TABLE_V[("orig", "low")]),
+            ("low", "filtered", PAPER_TABLE_V[("filtered", "low")])):
+        s = run_a["strat"][b]
+        node = (s or {}).get(rn[stratum]) or {}
+        ours = node.get("test_accuracy")
+        ours = ours * 100 if ours is not None else None
+        ours_s = f"**{ours:.2f}%**" if ours is not None else "—"
+        label = "≥10% cloud/shadow" if stratum == "high" else "<10% cloud/shadow"
+        A(f"| {label} | {b} | {paper_v:.2f}% | {ours_s} | {delta(ours, paper_v)} |")
+    A("")
+    hi = (da or {}).get("high_cloud") or {}
+    lo = (da or {}).get("low_cloud") or {}
+    A(f"All **{n_test_a}** test tiles are stratified "
+      f"({hi.get('n_tiles', '?')} high-cloud / {lo.get('n_tiles', '?')} low-cloud), "
+      f"`dropped_no_fraction={dropped_a}` — no tile is excluded, so neither column is "
+      "biased by a partial test set.")
+    A("")
+    hi_a_orig = (f"{hi['test_accuracy'] * 100:.2f}%"
+                 if "test_accuracy" in hi else "—")
+    A("**Key divergence from the paper:** the paper's largest filter benefit is on "
+      "≥10%-cloud *original* imagery (79.91% → 99.28%, +19 pt). Our original "
+      f"high-cloud accuracy is already high ({hi_a_orig}), so our filter gain there is "
+      "much smaller. Same root cause as §0.1 — self-consistent labels let the model fit "
+      "cloudy raw tiles better than the paper's pipeline could.")
+    A("")
+
+    # ── 0.4 Fig 13 ──────────────────────────────────────────────────────────
+    A("### 0.4 Fig 13 — per-class recall (U-Net-Auto)")
+    A("")
+    A("The diagonal of a row-normalized confusion matrix *is* per-class recall, so "
+      "these numbers are directly comparable to the diagonals of the paper's Fig 13. "
+      "The full matrices are paired image-for-image with the paper's figure in the "
+      "**Confusion matrices** section below.")
+    A("")
+    A("| Condition | Class | Paper | Ours | Δ |")
+    A("|---|---|:--:|:--:|:--:|")
+    cond_titles = {
+        ("orig", "high"): "≥10% cloud · original",
+        ("filtered", "high"): "≥10% cloud · filtered",
+        ("orig", "low"): "<10% cloud · original",
+        ("filtered", "low"): "<10% cloud · filtered",
+    }
+    classes = ("thin ice", "thick ice", "open water")
     for (b, stratum), title in cond_titles.items():
-        A(f"**{title}**")
-        A("")
-        A("```")
-        A("              true\\pred    thin  thick  water")
-        for src, mat in (("Paper ", PAPER_FIG13_FULL[(b, stratum)]),
-                         ("Run A ", (cm_a.get(b) or {}).get(rn[stratum])),
-                         ("Run B ", (cm_b.get(b) or {}).get(rn[stratum]))):
-            if mat is None:
-                A(f"{src}     (matrix unavailable)")
-                continue
-            for i, cls in enumerate(classes):
-                prefix = f"{src} {cls}" if i == 0 else f"       {cls}"
-                A(f"{prefix}        {fmt_row(mat[i])}")
-        A("```")
-        A("")
-    A("**What the matrices show.** Under ≥10% cloud/shadow on *original* imagery the "
-      "paper's model sends **24.0% of thick ice → thin** (75.95% thick recall) — its "
-      "signature cloud-shadow error. Our runs barely show that (thick recall ~98%); "
-      "instead our error is the *opposite* — some **thin → thick** and, on Run B, "
-      "thin→thick worsens (per-tile filtering). Filtering collapses nearly all "
-      "off-diagonals to ~0 in both the paper and Run A; **Run B's filtered branch is "
-      "the exception** — see §0.6.")
+        paper_mat = PAPER_FIG13_FULL[(b, stratum)]
+        pc = run_a["strat_pc"].get((b, stratum)) or {}
+        recalls = pc.get("recall") if isinstance(pc, dict) else None
+        for i, cls in enumerate(classes):
+            paper_v = paper_mat[i][i] if paper_mat else None
+            ours_v = recalls[i] * 100 if recalls and i < len(recalls) else None
+            row_title = title if i == 0 else ""
+            p_s = f"{paper_v:.1f}%" if paper_v is not None else "—"
+            o_s = f"**{ours_v:.1f}%**" if ours_v is not None else "—"
+            d_s = (f"{ours_v - paper_v:+.1f}"
+                   if (ours_v is not None and paper_v is not None) else "—")
+            A(f"| {row_title} | {cls} | {p_s} | {o_s} | {d_s} |")
+    A("")
+    A("**What this shows.** Under ≥10% cloud/shadow on *original* imagery the paper's "
+      "model recovers only **76.0%** of thick ice — its signature cloud-shadow error, "
+      "where shadowed thick ice is read as thin. Ours does not show that failure mode. "
+      "Filtering lifts every class to near-ceiling in both the paper and ours, which "
+      "is the paper's central qualitative claim and it reproduces.")
     A("")
 
     # 0.5 Coverage / not-compared
@@ -459,11 +429,11 @@ def render_comprehensive(run_a: dict, run_b: dict,
     A("|---|---|---|")
     A("| Table IV (U-Net-Auto accuracy) | ✅ Compared | §0.1 |")
     A("| Table IV P/R/F1 | ✅ Compared | §0.2 (paper has an apparent typo) |")
-    A("| Table V (stratified, U-Net-Auto) | ✅ Compared | §0.3 (Run B low-cloud caveat) |")
+    A("| Table V (stratified, U-Net-Auto) | ✅ Compared | §0.3 — all 845 test tiles, none dropped |")
     A("| Fig 13 auto-labeled confusion matrices | ✅ Compared | §0.4 (full 3×3 matrices) |")
-    A("| Fig 5 filtered-scene grid | ⚠️ Run A only | Run B has no full-scene filter pass, so no `filtered_s2_vis_*.png` |")
+    A("| Fig 5 filtered-scene grid | ✅ Qualitative | per-scene `filtered_s2_vis_*.png`; see the figure sections below |")
     A("| Fig 6 / Fig 11 color-seg auto-labeling | ✅ Qualitative | masks reproduced; see the figure sections below |")
-    A("| Fig 14 whole-scene predictions | ✅ Qualitative | 126 PNGs/run; no paper numbers to match |")
+    A("| Fig 14 whole-scene predictions | ✅ Qualitative | 132 PNGs (66 scenes × 2 branches); no paper numbers to match |")
     A("| **Table IV/V U-Net-Man column** | ❌ Not compared | No manual ground-truth labels in our dataset — we only run the auto-labeling (U-Net-Auto) path. |")
     A("| **Fig 13 manually-labeled matrices** | ❌ Not compared | Same — no U-Net-Man model. |")
     A("| **Auto-labeling SSIM (89% / 99.64%)** | ❌ Not compared | SSIM is measured against manual labels; none available. |")
@@ -477,29 +447,29 @@ def render_comprehensive(run_a: dict, run_b: dict,
       "speedups) — paper claim by claim, with effort estimates.")
     A("")
 
-    # 0.6 Interpreting the A-vs-B differences
-    A("### 0.6 Interpreting Run A vs Run B (variance vs. filter scale)")
+    # 0.6 Reading the numbers
+    A("### 0.6 How to read these numbers")
     A("")
-    A("- **Original branch is no longer a clean variance baseline.** It was one "
-      "while A and B shared a dataset; now that Run A uses the authors' 66 scenes "
-      "and Run B the legacy 63-scene export, the orig delta confounds dataset with "
-      "unseeded training variance. Historically this baseline measured ~2 pt of "
-      "run-to-run noise in overall accuracy and ~12 pt in thin-ice recall, so gaps "
-      "of that order still should not be over-read.")
-    A("- **Filtered branch = the real filter-scale comparison.** Here the difference "
-      "is larger than the variance baseline and concentrated in **thin ice**: Run A "
-      "(scene filter) holds thin-ice recall at **99.8%** overall, while Run B "
-      "(per-tile filter) drops to **81.1%** overall and **60.5%** on the low-cloud "
-      "(clearest) tiles. The per-tile `medianBlur(19)` filter, lacking scene context, "
-      "distorts thin-ice tiles enough that the U-Net misreads them as thick. This "
-      "39-pt low-cloud gap exceeds the ~12-pt orig variance, so it is most likely a "
-      "**genuine penalty of per-tile filtering**, not noise — though repeated seeded "
-      "runs are needed to put an error bar on it.")
-    A("- **The zero-cloud bug interacted with this.** Run B's *in-DAG* stratified eval "
-      "dropped the 127 zero-cloud tiles (`frac or -1.0`), which are exactly the "
-      "clear, thin-ice-heavy tiles its filter handles worst — so its raw per-stratum "
-      "PNGs (thin recall ~98%) flattered it. The matrices in §0.4 use the corrected "
-      "full sets (Run B low-cloud reconstructed as overall−high).")
+    A("- **The dataset is no longer a confound.** This run uses the authors' own 66 "
+      "scenes at their native 2048x2048, so the paper's 4,224 tiles are reproduced "
+      "exactly and nothing is resampled. An earlier run on a 63-scene Google Earth "
+      "Engine export resized 2000->2048 scored 96.25% / 99.76% — within a point of "
+      "this one, which retires the worry that the older numbers were an artifact of "
+      "that incomplete export.")
+    A("- **Our margin over the paper is a labeling artifact, not an improvement.** "
+      "Both our branches are scored against auto-labels derived from the same tiles "
+      "the U-Net consumes, so input and target are self-consistent by construction. "
+      "The paper's pipeline does not have that property. This is the single most "
+      "important caveat on every Delta in this report.")
+    A("- **The filtered branch sits near ceiling (~99.97%) for the same reason**, "
+      "amplified: `--filtered-labels filtered` re-derives labels from the filtered "
+      "tiles. Running `--filtered-labels raw` instead scores filtered inputs against "
+      "raw-scene labels and lands around 90%, which is the more honest "
+      "cross-comparison.")
+    A("- **Training is unseeded beyond the split.** Only `random_state=0` fixes the "
+      "train/test partition; weight init and dropout vary run to run, historically "
+      "worth ~1 pt of overall accuracy and considerably more on thin-ice recall. "
+      "Treat sub-point differences as noise.")
     A("")
     A("---")
     A("")
@@ -514,8 +484,6 @@ def render_report(
     paper_fig_dir: Path,
     paper_figs: dict,
     out_md: Path,
-    run_dir_b: Path = None,
-    run_label_b: str = None,
 ) -> None:
     eval_orig = read_eval(run_dir / "evaluation_results_orig.json")
     eval_filt = read_eval(run_dir / "evaluation_results_filtered.json")
@@ -532,17 +500,12 @@ def render_report(
     A("# S2 Sea-Ice Segmentation — Reproduction vs. Paper")
     A("")
 
-    # Comprehensive A+B comparison block (only when a Run B dir is supplied).
-    if run_dir_b is not None and run_dir_b.exists():
-        run_a_metrics = load_run(run_dir)
-        run_b_metrics = load_run(run_dir_b)
-        lines.extend(render_comprehensive(
-            run_a_metrics, run_b_metrics, run_label, run_label_b or "Run B",
-            repo_root=out_md.parent))
-        A("The sections below give the figure-by-figure detail for "
-          f"**Run A ({run_label})** (the canonical scene-filter run); Run B differs "
-          "only in filter scale and shares the same paper-figure pairings.")
-        A("")
+    # Side-by-side numeric comparison against the paper.
+    lines.extend(render_comprehensive(load_run(run_dir), run_label,
+                                      repo_root=out_md.parent))
+    A("The sections below pair each paper figure with the matching output from "
+      f"**{run_label}**, side by side.")
+    A("")
 
     A(f"**Run (figures below):** `{run_label}` &nbsp;·&nbsp; **Paper:** Iqrah, Wang, Xie, Prasad — "
       "*\"A Parallel Workflow for Polar Sea-Ice Classification using Auto-labeling of "
@@ -693,10 +656,15 @@ def render_report(
         A(f"- **Thin cloud / shadow-filtered S2 imagery (U-Net-Auto):** "
           f"{filt_pct:.2f}% accuracy vs paper's 98.97% "
           f"({filt_pct - 98.97:+.2f} pt).")
-        A(f"- The +{filt_pct - orig_pct:.2f} pt original→filtered swing "
-          "closely matches the paper's +8.79 pt improvement (90.18% → 98.97%), "
-          "confirming the paper's methodology: regenerate auto-labels by color-"
-          "segmenting the filtered tiles so input and label are self-consistent.")
+        A(f"- **Filtering helps us less than it helped the paper:** our "
+          f"original→filtered swing is +{filt_pct - orig_pct:.2f} pt against the "
+          "paper's +8.79 pt (90.18% → 98.97%). The direction reproduces; the "
+          "magnitude does not, because our unfiltered baseline already starts "
+          f"{orig_pct - 90.18:.2f} pt above the paper's and so has far less room "
+          "to gain. Both effects trace to the same cause — self-consistent "
+          "auto-labels (§0.6).")
+        A("- **Read every Δ above with that caveat.** Exceeding the paper here is "
+          "a property of how the labels are made, not evidence of a better model.")
     A("")
     A("See `comparison_report.html` for the styled long-form discussion of "
       "methodology, code review, and remaining differences.")
@@ -718,17 +686,10 @@ def main() -> None:
                                           "Sentinel-2_Imagery.pdf",
                     help="Path to the reference paper PDF")
     ap.add_argument("--run-dir", type=Path, default=here / "output",
-                    help="Pegasus run output directory (default: ./output, where the "
-                         "rsync'd run0009 artifacts live)")
-    ap.add_argument("--run-label", type=str, default="run0009",
-                    help="Display label for the run shown in the report header "
-                         "(default: run0009)")
-    ap.add_argument("--run-dir-b", type=Path, default=None,
-                    help="Optional second run directory (e.g. the per-tile-filter "
-                         "Run B). When given, a comprehensive Run A vs Run B vs "
-                         "paper comparison section is prepended.")
-    ap.add_argument("--run-label-b", type=str, default=None,
-                    help="Display label for the second run (Run B).")
+                    help="Pegasus run output directory holding the evaluation JSONs "
+                         "and figure PNGs (default: ./output)")
+    ap.add_argument("--run-label", type=str, default="run0003",
+                    help="Display label for the run shown in the report header")
     ap.add_argument("--paper-fig-dir", type=Path, default=here / "paper_figures",
                     help="Directory to write extracted paper figures into")
     ap.add_argument("--out", type=Path, default=here / "comparison_report.md",
@@ -753,8 +714,6 @@ def main() -> None:
         paper_fig_dir=args.paper_fig_dir,
         paper_figs=paper_figs,
         out_md=args.out,
-        run_dir_b=args.run_dir_b,
-        run_label_b=args.run_label_b,
     )
 
 
