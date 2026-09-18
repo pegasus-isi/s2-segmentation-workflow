@@ -115,6 +115,24 @@ def plot_training_curves(history, output_dir, dpi=150, prefix=""):
     logger.info(f"Saved {out_path}")
 
 
+# Paper Fig 14 legend: Thick Ice = red, Thin Ice = blue, Open Water = green.
+# Index order is the label-encoder order (sorted mask gray values):
+#   0 = thin ice (29), 1 = thick ice (76), 2 = open water (149).
+# These are the same three colours bin/color_segment.py paints the masks with,
+# so predictions render in the same palette as the auto-labels they came from.
+CLASS_COLORS = [
+    (0.0, 0.0, 1.0),   # 0 thin ice   — blue
+    (1.0, 0.0, 0.0),   # 1 thick ice  — red
+    (0.0, 1.0, 0.0),   # 2 open water — green
+]
+
+
+def class_cmap(n_classes):
+    """Discrete colormap in the paper's class colours."""
+    from matplotlib.colors import ListedColormap
+    return ListedColormap(CLASS_COLORS[:n_classes])
+
+
 def plot_confusion_matrix(y_true, y_pred, class_names, output_dir, dpi=150, labels=None, prefix=""):
     """Normalized confusion matrix matching paper Fig 13."""
     from sklearn.metrics import confusion_matrix as sk_confusion_matrix
@@ -141,12 +159,14 @@ def plot_confusion_matrix(y_true, y_pred, class_names, output_dir, dpi=150, labe
     thresh = cm_norm.max() / 2.0
     for i in range(cm_norm.shape[0]):
         for j in range(cm_norm.shape[1]):
-            ax.text(
-                j, i,
-                f"{cm_norm[i, j]:.2f}\n({cm[i, j]})",
-                ha="center", va="center",
-                color="white" if cm_norm[i, j] > thresh else "black",
-            )
+            colour = "white" if cm_norm[i, j] > thresh else "black"
+            # Paper Fig 13 annotates each cell as a row-normalized percentage.
+            ax.text(j, i - 0.06, f"{cm_norm[i, j] * 100:.2f}%",
+                    ha="center", va="center", color=colour, fontsize=12)
+            # Raw pixel counts kept underneath — the paper omits them, but they
+            # are what makes the matrix auditable.
+            ax.text(j, i + 0.16, f"({cm[i, j]:,})",
+                    ha="center", va="center", color=colour, fontsize=8)
 
     fig.tight_layout()
     out_path = os.path.join(output_dir, prefix + "confusion_matrix.png")
@@ -154,11 +174,23 @@ def plot_confusion_matrix(y_true, y_pred, class_names, output_dir, dpi=150, labe
     plt.close(fig)
     logger.info(f"Saved {out_path}")
 
+    # Also write the matrix as JSON. Rendering it only as a PNG meant the numbers
+    # could not be read back for reporting without re-running evaluation.
+    json_path = os.path.join(output_dir, prefix + "confusion_matrix.json")
+    with open(json_path, "w") as fh:
+        json.dump({
+            "class_order": list(class_names),
+            "counts": cm.tolist(),
+            "row_normalized_pct": (cm_norm * 100).round(4).tolist(),
+        }, fh, indent=2)
+    logger.info(f"Saved {json_path}")
+
 
 def plot_prediction_samples(X_test, y_true, y_pred, class_names, n, output_dir, dpi=150, prefix=""):
     """Grid of N samples: input image | ground truth mask | predicted mask."""
     n_classes = len(class_names)
     n = min(n, len(X_test))
+    cmap = class_cmap(n_classes)
 
     # Pick evenly-spaced indices
     indices = np.linspace(0, len(X_test) - 1, n, dtype=int)
@@ -179,18 +211,27 @@ def plot_prediction_samples(X_test, y_true, y_pred, class_names, n, output_dir, 
 
         # Ground truth
         ax = axes[row, 1]
-        ax.imshow(y_true[idx], cmap="viridis", vmin=0, vmax=n_classes - 1)
+        ax.imshow(y_true[idx], cmap=cmap, vmin=-0.5, vmax=n_classes - 0.5)
         ax.set_title("Ground Truth")
         ax.axis("off")
 
         # Prediction
         ax = axes[row, 2]
-        ax.imshow(y_pred[idx], cmap="viridis", vmin=0, vmax=n_classes - 1)
+        ax.imshow(y_pred[idx], cmap=cmap, vmin=-0.5, vmax=n_classes - 0.5)
         ax.set_title("Prediction")
         ax.axis("off")
 
     fig.suptitle("Sample Predictions", fontsize=14, fontweight="bold")
-    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    # Legend in the paper's wording and colour order (Fig 14).
+    from matplotlib.patches import Patch
+    legend_order = [1, 0, 2][:n_classes] if n_classes == 3 else range(n_classes)
+    fig.legend(
+        handles=[Patch(facecolor=CLASS_COLORS[i], edgecolor="black",
+                       label=class_names[i]) for i in legend_order],
+        loc="lower center", ncol=n_classes, frameon=False, fontsize=11,
+        bbox_to_anchor=(0.5, -0.01),
+    )
+    fig.tight_layout(rect=[0, 0.03, 1, 0.97])
 
     out_path = os.path.join(output_dir, prefix + "prediction_samples.png")
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")

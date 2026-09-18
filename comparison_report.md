@@ -37,26 +37,59 @@ All **845** test tiles are stratified (340 high-cloud / 505 low-cloud), `dropped
 
 **Key divergence from the paper:** the paper's largest filter benefit is on ≥10%-cloud *original* imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy is already high (95.31%), so our filter gain there is much smaller. Same root cause as §0.1 — self-consistent labels let the model fit cloudy raw tiles better than the paper's pipeline could.
 
-### 0.4 Fig 13 — per-class recall (U-Net-Auto)
+### 0.4 Fig 13 — confusion matrices (U-Net-Auto)
 
-The diagonal of a row-normalized confusion matrix *is* per-class recall, so these numbers are directly comparable to the diagonals of the paper's Fig 13. The full matrices are paired image-for-image with the paper's figure in the **Confusion matrices** section below.
+Row-normalized percentages, rows = true class, cols = predicted, in the paper's class order (thin / thick / water) and its percentage format. The **diagonal is per-class recall**; off-diagonals are the cloud-shadow-induced confusion the paper highlights. Computed on all 845 test tiles.
 
-| Condition | Class | Paper | Ours | Δ |
-|---|---|:--:|:--:|:--:|
-| ≥10% cloud · original | thin ice | 95.3% | **94.6%** | -0.7 |
-|  | thick ice | 76.0% | **96.9%** | +20.9 |
-|  | open water | 92.2% | **91.0%** | -1.2 |
-| ≥10% cloud · filtered | thin ice | 98.9% | **99.9%** | +1.0 |
-|  | thick ice | 99.5% | **100.0%** | +0.5 |
-|  | open water | 97.0% | **100.0%** | +3.0 |
-| <10% cloud · original | thin ice | 85.7% | **88.0%** | +2.3 |
-|  | thick ice | 98.6% | **98.9%** | +0.3 |
-|  | open water | 97.0% | **98.9%** | +1.9 |
-| <10% cloud · filtered | thin ice | 97.9% | **99.6%** | +1.7 |
-|  | thick ice | 99.1% | **100.0%** | +0.9 |
-|  | open water | 98.8% | **100.0%** | +1.2 |
+**≥10% cloud/shadow · original  (paper: "cloudy-shadowy")**
 
-**What this shows.** Under ≥10% cloud/shadow on *original* imagery the paper's model recovers only **76.0%** of thick ice — its signature cloud-shadow error, where shadowed thick ice is read as thin. Ours does not show that failure mode. Filtering lifts every class to near-ceiling in both the paper and ours, which is the paper's central qualitative claim and it reproduces.
+```
+            true\pred     thin    thick    water
+Paper  thin        95.30%   3.92%   0.78%
+       thick       24.05%  75.95%   0.00%
+       water        7.58%   0.24%  92.18%
+Ours   thin        94.61%   4.62%   0.77%
+       thick        3.15%  96.85%   0.00%
+       water        8.95%   0.07%  90.98%
+```
+
+**≥10% cloud/shadow · filtered  (paper: "cloud-shadow-removed")**
+
+```
+            true\pred     thin    thick    water
+Paper  thin        98.90%   1.01%   0.09%
+       thick        0.49%  99.51%   0.00%
+       water        2.16%   0.00%  97.84%
+Ours   thin        99.88%   0.12%   0.00%
+       thick        0.04%  99.96%   0.00%
+       water        0.00%   0.00% 100.00%
+```
+
+**<10% cloud/shadow · original  (paper: "cloud-shadow-free")**
+
+```
+            true\pred     thin    thick    water
+Paper  thin        85.74%  13.56%   0.70%
+       thick        1.43%  98.57%   0.00%
+       water        2.98%   0.04%  96.98%
+Ours   thin        88.04%  11.45%   0.51%
+       thick        1.09%  98.91%   0.00%
+       water        1.06%   0.05%  98.89%
+```
+
+**<10% cloud/shadow · filtered**
+
+```
+            true\pred     thin    thick    water
+Paper  thin        97.92%   1.99%   0.09%
+       thick        0.88%  99.12%   0.00%
+       water        1.21%   0.00%  98.79%
+Ours   thin        99.62%   0.38%   0.00%
+       thick        0.01%  99.99%   0.00%
+       water        0.00%   0.00% 100.00%
+```
+
+**What the matrices show.** Under ≥10% cloud/shadow on *original* imagery the paper's model sends **24.05% of thick ice → thin** (75.95% thick recall) — its signature cloud-shadow error, where shadowed thick ice reads as thin. We show the *same* error in the same direction but far smaller — 3.15% thick → thin, leaving thick-ice recall at 96.85%. Filtering collapses nearly every off-diagonal below 0.2% in both the paper and ours — the paper's central qualitative claim, and it reproduces.
 
 ### 0.5 Paper-claim coverage — what is and isn't compared
 

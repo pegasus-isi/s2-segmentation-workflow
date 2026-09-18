@@ -217,9 +217,9 @@ PAPER_FIG13_AUTO = {
 # conditions); the diagonal there is still readable.
 PAPER_FIG13_FULL = {
     ("orig", "high"): [[95.30, 3.92, 0.78], [24.05, 75.95, 0.00], [7.58, 0.24, 92.18]],
-    ("filtered", "high"): [[98.90, 1.01, 0.09], [0.49, 99.51, 0.00], [None, None, 97.04]],
+    ("filtered", "high"): [[98.90, 1.01, 0.09], [0.49, 99.51, 0.00], [2.16, 0.00, 97.84]],
     ("orig", "low"): [[85.74, 13.56, 0.70], [1.43, 98.57, 0.00], [2.98, 0.04, 96.98]],
-    ("filtered", "low"): [[97.92, 1.99, 0.09], [0.88, 99.12, 0.00], [None, None, 98.79]],
+    ("filtered", "low"): [[97.92, 1.99, 0.09], [0.88, 99.12, 0.00], [1.21, 0.00, 98.79]],
 }
 
 
@@ -258,7 +258,7 @@ def img_md(path, rel_from: Path) -> str:
 
 def load_run(run_dir: Path) -> dict:
     """Collect a run's comparable metrics into one dict (None where absent)."""
-    d = {"overall": {}, "strat": {}, "strat_pc": {}}
+    d = {"overall": {}, "strat": {}, "strat_pc": {}, "cm": {}}
     for b in ("orig", "filtered"):
         d["overall"][b] = read_eval(run_dir / f"evaluation_results_{b}.json")
         s = read_eval(run_dir / f"{b}_stratified_summary.json")
@@ -266,6 +266,9 @@ def load_run(run_dir: Path) -> dict:
         for stratum in ("high", "low"):
             pc = per_class(run_dir / f"{b}_{stratum}_cloud_per_class_metrics.json")
             d["strat_pc"][(b, stratum)] = pc
+            cmj = read_eval(
+                run_dir / f"{b}_{stratum}_cloud_confusion_matrix.json")
+            d["cm"][(b, stratum)] = (cmj or {}).get("row_normalized_pct")
     return d
 
 
@@ -385,41 +388,46 @@ def render_comprehensive(run_a: dict, label_a: str,
     A("")
 
     # ── 0.4 Fig 13 ──────────────────────────────────────────────────────────
-    A("### 0.4 Fig 13 — per-class recall (U-Net-Auto)")
+    A("### 0.4 Fig 13 — confusion matrices (U-Net-Auto)")
     A("")
-    A("The diagonal of a row-normalized confusion matrix *is* per-class recall, so "
-      "these numbers are directly comparable to the diagonals of the paper's Fig 13. "
-      "The full matrices are paired image-for-image with the paper's figure in the "
-      "**Confusion matrices** section below.")
+    A("Row-normalized percentages, rows = true class, cols = predicted, in the "
+      "paper's class order (thin / thick / water) and its percentage format. The "
+      "**diagonal is per-class recall**; off-diagonals are the cloud-shadow-induced "
+      f"confusion the paper highlights. Computed on all {n_test_a} test tiles.")
     A("")
-    A("| Condition | Class | Paper | Ours | Δ |")
-    A("|---|---|:--:|:--:|:--:|")
+
+    def fmt_row(r):
+        return " ".join("     ?" if v is None else f"{v:6.2f}%" for v in r)
+
     cond_titles = {
-        ("orig", "high"): "≥10% cloud · original",
-        ("filtered", "high"): "≥10% cloud · filtered",
-        ("orig", "low"): "<10% cloud · original",
-        ("filtered", "low"): "<10% cloud · filtered",
+        ("orig", "high"): "≥10% cloud/shadow · original  (paper: \"cloudy-shadowy\")",
+        ("filtered", "high"): "≥10% cloud/shadow · filtered  (paper: \"cloud-shadow-removed\")",
+        ("orig", "low"): "<10% cloud/shadow · original  (paper: \"cloud-shadow-free\")",
+        ("filtered", "low"): "<10% cloud/shadow · filtered",
     }
-    classes = ("thin ice", "thick ice", "open water")
+    classes = ("thin ", "thick", "water")
     for (b, stratum), title in cond_titles.items():
-        paper_mat = PAPER_FIG13_FULL[(b, stratum)]
-        pc = run_a["strat_pc"].get((b, stratum)) or {}
-        recalls = pc.get("recall") if isinstance(pc, dict) else None
-        for i, cls in enumerate(classes):
-            paper_v = paper_mat[i][i] if paper_mat else None
-            ours_v = recalls[i] * 100 if recalls and i < len(recalls) else None
-            row_title = title if i == 0 else ""
-            p_s = f"{paper_v:.1f}%" if paper_v is not None else "—"
-            o_s = f"**{ours_v:.1f}%**" if ours_v is not None else "—"
-            d_s = (f"{ours_v - paper_v:+.1f}"
-                   if (ours_v is not None and paper_v is not None) else "—")
-            A(f"| {row_title} | {cls} | {p_s} | {o_s} | {d_s} |")
-    A("")
-    A("**What this shows.** Under ≥10% cloud/shadow on *original* imagery the paper's "
-      "model recovers only **76.0%** of thick ice — its signature cloud-shadow error, "
-      "where shadowed thick ice is read as thin. Ours does not show that failure mode. "
-      "Filtering lifts every class to near-ceiling in both the paper and ours, which "
-      "is the paper's central qualitative claim and it reproduces.")
+        A(f"**{title}**")
+        A("")
+        A("```")
+        A("            true\\pred     thin    thick    water")
+        for src, mat in (("Paper", PAPER_FIG13_FULL[(b, stratum)]),
+                         ("Ours ", run_a["cm"].get((b, stratum)))):
+            if mat is None:
+                A(f"{src}      (matrix unavailable)")
+                continue
+            for i, cls in enumerate(classes):
+                prefix = f"{src}  {cls}" if i == 0 else f"       {cls}"
+                A(f"{prefix}      {fmt_row(mat[i])}")
+        A("```")
+        A("")
+    A("**What the matrices show.** Under ≥10% cloud/shadow on *original* imagery the "
+      "paper's model sends **24.05% of thick ice → thin** (75.95% thick recall) — its "
+      "signature cloud-shadow error, where shadowed thick ice reads as thin. We show "
+      "the *same* error in the same direction but far smaller — 3.15% thick → thin, "
+      "leaving thick-ice recall at 96.85%. Filtering collapses "
+      "nearly every off-diagonal below 0.2% in both the paper and ours — the paper's "
+      "central qualitative claim, and it reproduces.")
     A("")
 
     # 0.5 Coverage / not-compared

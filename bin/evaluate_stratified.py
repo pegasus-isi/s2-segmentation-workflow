@@ -90,16 +90,27 @@ def plot_cm(y_true, y_pred, class_names, out_path, title, dpi=150):
     thresh = cm_norm.max() / 2.0
     for i in range(cm_norm.shape[0]):
         for j in range(cm_norm.shape[1]):
-            ax.text(
-                j, i,
-                f"{cm_norm[i, j]:.2f}\n({cm[i, j]})",
-                ha="center", va="center",
-                color="white" if cm_norm[i, j] > thresh else "black",
-            )
+            colour = "white" if cm_norm[i, j] > thresh else "black"
+            # Paper Fig 13 annotates each cell as a row-normalized percentage.
+            ax.text(j, i - 0.06, f"{cm_norm[i, j] * 100:.2f}%",
+                    ha="center", va="center", color=colour, fontsize=12)
+            ax.text(j, i + 0.16, f"({cm[i, j]:,})",
+                    ha="center", va="center", color=colour, fontsize=8)
     fig.tight_layout()
     fig.savefig(out_path, dpi=dpi, bbox_inches="tight")
     plt.close(fig)
     logger.info(f"Saved {out_path}")
+
+    # Write the matrix as data too, so per-stratum numbers can be reported
+    # without re-running evaluation.
+    json_path = os.path.splitext(out_path)[0] + ".json"
+    with open(json_path, "w") as fh:
+        json.dump({
+            "class_order": list(class_names),
+            "counts": cm.tolist(),
+            "row_normalized_pct": (cm_norm * 100).round(4).tolist(),
+        }, fh, indent=2)
+    logger.info(f"Saved {json_path}")
 
 
 def plot_metrics_table(per_class, class_names, title, out_path, dpi=150):

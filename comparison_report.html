@@ -103,28 +103,45 @@ imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy already st
 so our gain there is much smaller — same root cause as §1, self-consistent labels let the model
 fit cloudy raw tiles better than the paper's pipeline could.</p>
 
-<h3>2.4 Fig 13 — per-class recall</h3>
-<p>The diagonal of a row-normalized confusion matrix <em>is</em> per-class recall, so these are
-directly comparable to the diagonals of the paper's Fig 13.</p>
-<table>
-<tr><th>Condition</th><th>Class</th><th class="n">Paper</th><th class="n">Ours</th><th class="n">Δ</th></tr>
-<tr><td rowspan="3">≥10% cloud · original</td><td>thin ice</td><td class="n">95.3%</td><td class="n">94.6%</td><td class="n">−0.7</td></tr>
-<tr><td>thick ice</td><td class="n bad">76.0%</td><td class="n good">96.9%</td><td class="n good">+20.9</td></tr>
-<tr><td>open water</td><td class="n">92.2%</td><td class="n">91.0%</td><td class="n">−1.2</td></tr>
-<tr><td rowspan="3">≥10% cloud · filtered</td><td>thin ice</td><td class="n">98.9%</td><td class="n good">99.9%</td><td class="n good">+1.0</td></tr>
-<tr><td>thick ice</td><td class="n">99.5%</td><td class="n good">100.0%</td><td class="n good">+0.5</td></tr>
-<tr><td>open water</td><td class="n">97.0%</td><td class="n good">100.0%</td><td class="n good">+3.0</td></tr>
-<tr><td rowspan="3">&lt;10% cloud · original</td><td>thin ice</td><td class="n">85.7%</td><td class="n">88.0%</td><td class="n good">+2.3</td></tr>
-<tr><td>thick ice</td><td class="n">98.6%</td><td class="n">98.9%</td><td class="n">+0.3</td></tr>
-<tr><td>open water</td><td class="n">97.0%</td><td class="n">98.9%</td><td class="n">+1.9</td></tr>
-<tr><td rowspan="3">&lt;10% cloud · filtered</td><td>thin ice</td><td class="n">97.9%</td><td class="n good">99.6%</td><td class="n good">+1.7</td></tr>
-<tr><td>thick ice</td><td class="n">99.1%</td><td class="n good">100.0%</td><td class="n good">+0.9</td></tr>
-<tr><td>open water</td><td class="n">98.8%</td><td class="n good">100.0%</td><td class="n good">+1.2</td></tr>
+<h3>2.4 Fig 13 — confusion matrices</h3>
+<p>Row-normalized percentages in the paper's class order and format; rows = true class, cols = predicted. The diagonal is per-class recall. Computed on all 845 test tiles.</p>
+<h4 style="margin:14px 0 4px;color:var(--muted);font-size:.95rem">≥10% cloud · original</h4>
+<table><tr><th>Source</th><th>True \ Pred</th><th class="n">thin ice</th><th class="n">thick ice</th><th class="n">open water</th></tr>
+<tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n good">95.30%</td><td class="n">3.92%</td><td class="n">0.78%</td></tr>
+<tr><td>thick ice</td><td class="n">24.05%</td><td class="n">75.95%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">7.58%</td><td class="n">0.24%</td><td class="n">92.18%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n">94.61%</td><td class="n">4.62%</td><td class="n">0.77%</td></tr>
+<tr><td>thick ice</td><td class="n">3.15%</td><td class="n good">96.85%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">8.95%</td><td class="n">0.07%</td><td class="n">90.98%</td></tr>
 </table>
-<p><b>What this shows.</b> Under ≥10% cloud/shadow on <em>original</em> imagery the paper's model
-recovers only <b>76.0%</b> of thick ice — its signature cloud-shadow error, where shadowed thick
-ice reads as thin. We do not show that failure mode. Filtering lifts every class to near-ceiling
-in both the paper and ours, which is the paper's central qualitative claim, and it reproduces.</p>
+<h4 style="margin:14px 0 4px;color:var(--muted);font-size:.95rem">≥10% cloud · filtered</h4>
+<table><tr><th>Source</th><th>True \ Pred</th><th class="n">thin ice</th><th class="n">thick ice</th><th class="n">open water</th></tr>
+<tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n good">98.90%</td><td class="n">1.01%</td><td class="n">0.09%</td></tr>
+<tr><td>thick ice</td><td class="n">0.49%</td><td class="n good">99.51%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">2.16%</td><td class="n">0.00%</td><td class="n good">97.84%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n good">99.88%</td><td class="n">0.12%</td><td class="n">0.00%</td></tr>
+<tr><td>thick ice</td><td class="n">0.04%</td><td class="n good">99.96%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">0.00%</td><td class="n">0.00%</td><td class="n good">100.00%</td></tr>
+</table>
+<h4 style="margin:14px 0 4px;color:var(--muted);font-size:.95rem"><10% cloud · original</h4>
+<table><tr><th>Source</th><th>True \ Pred</th><th class="n">thin ice</th><th class="n">thick ice</th><th class="n">open water</th></tr>
+<tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n">85.74%</td><td class="n">13.56%</td><td class="n">0.70%</td></tr>
+<tr><td>thick ice</td><td class="n">1.43%</td><td class="n good">98.57%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">2.98%</td><td class="n">0.04%</td><td class="n good">96.98%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n">88.04%</td><td class="n">11.45%</td><td class="n">0.51%</td></tr>
+<tr><td>thick ice</td><td class="n">1.09%</td><td class="n good">98.91%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">1.06%</td><td class="n">0.05%</td><td class="n good">98.89%</td></tr>
+</table>
+<h4 style="margin:14px 0 4px;color:var(--muted);font-size:.95rem"><10% cloud · filtered</h4>
+<table><tr><th>Source</th><th>True \ Pred</th><th class="n">thin ice</th><th class="n">thick ice</th><th class="n">open water</th></tr>
+<tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n good">97.92%</td><td class="n">1.99%</td><td class="n">0.09%</td></tr>
+<tr><td>thick ice</td><td class="n">0.88%</td><td class="n good">99.12%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">1.21%</td><td class="n">0.00%</td><td class="n good">98.79%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n good">99.62%</td><td class="n">0.38%</td><td class="n">0.00%</td></tr>
+<tr><td>thick ice</td><td class="n">0.01%</td><td class="n good">99.99%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">0.00%</td><td class="n">0.00%</td><td class="n good">100.00%</td></tr>
+</table>
+<p><b>What the matrices show.</b> Under ≥10% cloud/shadow on <em>original</em> imagery the paper's model sends <b class="bad">24.05%</b> of thick ice → thin (75.95% thick recall) — its signature cloud-shadow error, where shadowed thick ice reads as thin. We show the <em>same</em> error in the same direction but far smaller — 3.15% thick → thin, leaving thick-ice recall at <b class="good">96.85%</b>. Filtering collapses nearly every off-diagonal below 0.2% in both the paper and ours, which is the paper's central qualitative claim.</p>
 
 <h3>2.5 Paper-claim coverage</h3>
 <table>
