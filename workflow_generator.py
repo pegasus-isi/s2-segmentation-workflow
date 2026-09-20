@@ -737,6 +737,10 @@ class S2SegmentationWorkflow:
             strat_low_eval = File(f"{prefix}evaluation_results_low_cloud.json")
             strat_high_cm = File(f"{prefix}high_cloud_confusion_matrix.png")
             strat_low_cm = File(f"{prefix}low_cloud_confusion_matrix.png")
+            # JSON companions to the matrix PNGs — without these the numbers
+            # exist only as pixels and cannot be read back for reporting.
+            strat_high_cmj = File(f"{prefix}high_cloud_confusion_matrix.json")
+            strat_low_cmj = File(f"{prefix}low_cloud_confusion_matrix.json")
             strat_high_pc = File(f"{prefix}high_cloud_per_class_metrics.json")
             strat_low_pc = File(f"{prefix}low_cloud_per_class_metrics.json")
             strat_high_mt = File(f"{prefix}high_cloud_metrics_table.png")
@@ -761,6 +765,8 @@ class S2SegmentationWorkflow:
                 .add_outputs(strat_low_eval, stage_out=True, register_replica=False)
                 .add_outputs(strat_high_cm, stage_out=True, register_replica=False)
                 .add_outputs(strat_low_cm, stage_out=True, register_replica=False)
+                .add_outputs(strat_high_cmj, stage_out=True, register_replica=False)
+                .add_outputs(strat_low_cmj, stage_out=True, register_replica=False)
                 .add_outputs(strat_high_pc, stage_out=True, register_replica=False)
                 .add_outputs(strat_low_pc, stage_out=True, register_replica=False)
                 .add_outputs(strat_high_mt, stage_out=True, register_replica=False)
@@ -771,6 +777,7 @@ class S2SegmentationWorkflow:
         # --- Job: generate_plots ---
         training_curves = File(f"{prefix}training_curves.png")
         confusion_matrix = File(f"{prefix}confusion_matrix.png")
+        confusion_matrix_json = File(f"{prefix}confusion_matrix.json")
         prediction_samples = File(f"{prefix}prediction_samples.png")
         metrics_table = File(f"{prefix}metrics_table.png")
         per_class_json = File(f"{prefix}per_class_metrics.json")
@@ -795,6 +802,7 @@ class S2SegmentationWorkflow:
                         x_test_file, y_test_file, model_py_file, metadata_file)
             .add_outputs(training_curves, stage_out=True, register_replica=False)
             .add_outputs(confusion_matrix, stage_out=True, register_replica=False)
+            .add_outputs(confusion_matrix_json, stage_out=True, register_replica=False)
             .add_outputs(prediction_samples, stage_out=True, register_replica=False)
             .add_outputs(metrics_table, stage_out=True, register_replica=False)
             .add_outputs(per_class_json, stage_out=True, register_replica=False)
