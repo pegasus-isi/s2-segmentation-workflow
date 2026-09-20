@@ -559,26 +559,27 @@ so the difference can be measured:
 Gaps that are *not* yet covered are tracked in `gap_analysis.md` (most notably §2.1 SSIM,
 §2.2 U-Net-Man manual-label baseline, and the Spark map-reduce auto-labeling speedup).
 
-**Latest reproduction results** (run0003, 2026-09-18 — the first run on the authors'
-own 66-scene dataset: native 2048x2048, no resampling, the paper's full 4,224 tiles
-(3,379 train / 845 test); 300 clustered DAG nodes, 0 failures, 0 held):
+**Latest reproduction results** (run0004, 2026-09-20 — the authors' 66-scene dataset:
+native 2048x2048, no resampling, the paper's full 4,224 tiles (3,379 train / 845 test);
+300 clustered DAG nodes, 0 failures, 0 held):
 
 | Condition | Paper (U-Net-Auto) | Ours | Δ |
 |---|:--:|:--:|:--:|
-| Original S2 imagery | 90.18% | **96.69%** | +6.51 pt |
-| Thin cloud / shadow filtered | 98.97% | **99.97%** | +1.00 pt |
+| Original S2 imagery | 90.18% | **96.37%** | +6.19 pt |
+| Thin cloud / shadow filtered | 98.97% | **99.84%** | +0.87 pt |
 
-Cloud-stratified (Table V): orig 95.31% high-cloud / 97.62% low-cloud; filtered
-99.95% / 99.98%, all 845 test tiles stratified with none dropped.
+Cloud-stratified (Table V): orig 94.45% high-cloud / 97.67% low-cloud; filtered
+99.72% / 99.92%, all 845 test tiles stratified with none dropped.
 
-The informative part is how *little* moved: the previous canonical run scored
-96.25% / 99.76% on a 63-scene GEE export resampled 2000→2048, so the authors' true
-pixels and the three extra scenes shift the headline by well under a point — the earlier
-numbers were not an artifact of the incomplete export. The standing caveat also survives:
-the ~6.5 pt edge on orig reflects self-consistent auto-labels (the U-Net is scored against
-labels derived from the tiles it sees), not a better reproduction. See
-`comparison_report.md` (figure-by-figure, auto-generated) and `comparison_report.html`
-(long-form discussion) for details.
+The informative part is how *little* moves between runs. A 63-scene GEE export resampled
+2000→2048 scored 96.25% / 99.76%, and run0003 on this same dataset scored 96.69% / 99.84% —
+all within a point of each other. So the authors' true pixels and the three extra scenes
+shift the headline by well under a point (the earlier numbers were not an artifact of the
+incomplete export), and run0003-vs-run0004 on identical inputs puts ~0.3 pt on unseeded
+run-to-run variance. The standing caveat survives: the ~6 pt edge on orig reflects
+self-consistent auto-labels (the U-Net is scored against labels derived from the tiles it
+sees), not a better reproduction. See `comparison_report.md` (figure-by-figure,
+auto-generated) and `comparison_report.html` (long-form discussion) for details.
 
 ### Run A — paper Table IV + V + Fig 13 + Fig 14 (single submission)
 

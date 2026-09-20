@@ -2,9 +2,9 @@
 
 **Date:** 2026-06-08 (updated 2026-06-17)
 **Workflow:** `s2-segmentation-workflow/`
-**Latest results:** `run0003` (2026-09-18) is the current canonical run and the **first on the
-authors' own 66-scene dataset** — native 2048x2048, no resampling, the paper's full 4,224 tiles.
-Table IV: orig **96.69%** (paper 90.18%), filtered **99.97%** (paper 98.97%). See
+**Latest results:** `run0004` (2026-09-20) is the current canonical run, on the
+**authors' own 66-scene dataset** — native 2048x2048, no resampling, the paper's full 4,224 tiles.
+Table IV: orig **96.37%** (paper 90.18%), filtered **99.84%** (paper 98.97%). See
 `comparison_report.md` / `comparison_report.html` for the consolidated comparison, including full
 Fig 13 confusion matrices. Note that Run B (tile filter) still runs on the legacy 63-scene export,
 so the A-B delta now confounds filter scale with dataset.

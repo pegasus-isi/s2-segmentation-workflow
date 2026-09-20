@@ -421,13 +421,22 @@ def render_comprehensive(run_a: dict, label_a: str,
                 A(f"{prefix}      {fmt_row(mat[i])}")
         A("```")
         A("")
+    # Derived, not hardcoded — these drifted between runs when written by hand.
+    oh = run_a["cm"].get(("orig", "high")) or []
+    t2t = f"{oh[1][0]:.2f}%" if oh else "—"
+    trec = f"{oh[1][1]:.2f}%" if oh else "—"
+    fh = run_a["cm"].get(("filtered", "high")) or []
+    fl = run_a["cm"].get(("filtered", "low")) or []
+    offs = [v for m in (fh, fl) for i, r in enumerate(m) for j, v in enumerate(r)
+            if i != j]
+    worst = f"{max(offs):.2f}%" if offs else "—"
     A("**What the matrices show.** Under ≥10% cloud/shadow on *original* imagery the "
       "paper's model sends **24.05% of thick ice → thin** (75.95% thick recall) — its "
       "signature cloud-shadow error, where shadowed thick ice reads as thin. We show "
-      "the *same* error in the same direction but far smaller — 3.15% thick → thin, "
-      "leaving thick-ice recall at 96.85%. Filtering collapses "
-      "nearly every off-diagonal below 0.2% in both the paper and ours — the paper's "
-      "central qualitative claim, and it reproduces.")
+      f"the *same* error in the same direction but far smaller: {t2t} thick → thin, "
+      f"leaving thick-ice recall at {trec}. Filtering collapses every off-diagonal to "
+      f"at most {worst} in our run, against the paper's largest filtered off-diagonal "
+      "of 2.16% — the paper's central qualitative claim, and it reproduces.")
     A("")
 
     # 0.5 Coverage / not-compared
@@ -469,7 +478,9 @@ def render_comprehensive(run_a: dict, label_a: str,
       "the U-Net consumes, so input and target are self-consistent by construction. "
       "The paper's pipeline does not have that property. This is the single most "
       "important caveat on every Delta in this report.")
-    A("- **The filtered branch sits near ceiling (~99.97%) for the same reason**, "
+    filt_ev = run_a["overall"].get("filtered")
+    filt_s = f"~{filt_ev['test_accuracy'] * 100:.2f}%" if filt_ev else "near ceiling"
+    A(f"- **The filtered branch sits near ceiling ({filt_s}) for the same reason**, "
       "amplified: `--filtered-labels filtered` re-derives labels from the filtered "
       "tiles. Running `--filtered-labels raw` instead scores filtered inputs against "
       "raw-scene labels and lands around 90%, which is the more honest "

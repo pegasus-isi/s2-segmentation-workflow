@@ -33,7 +33,7 @@
 <body>
 
 <h1>S2 Sea-Ice Segmentation — Reproduction vs. Paper</h1>
-<div class="meta"><b>Report date:</b> 2026-09-18 &nbsp;·&nbsp; <b>Run:</b> run0003 — the authors' own 66-scene dataset &nbsp;·&nbsp; <b>Workflow:</b> s2-segmentation-workflow (Pegasus, auto-label U-Net)</div>
+<div class="meta"><b>Report date:</b> 2026-09-20 &nbsp;·&nbsp; <b>Run:</b> run0004 — the authors' own 66-scene dataset &nbsp;·&nbsp; <b>Workflow:</b> s2-segmentation-workflow (Pegasus, auto-label U-Net)</div>
 <div class="meta"><b>Paper:</b> Iqrah, Wang, Xie, Prasad — "A Parallel Workflow for Polar Sea-Ice Classification using Auto-labeling of Sentinel-2 Imagery," IEEE IPDPSW 2024.</div>
 <div class="meta"><b>Reference code:</b> S2_Parallel_Workflow/ (s2_u_net_tf.py, s2_u_net_horovod.py, two notebooks).</div>
 <p><span class="pill">66 scenes · native 2048² · 4,224 tiles of 256² · 3,379 train / 845 test · 50 epochs · batch 32 · Adam · 3 classes · random_state=0</span></p>
@@ -43,10 +43,10 @@
 <b>This is the first reproduction on the authors' own data.</b> They supplied the source
 scenes directly — 66 PNGs, natively 2048×2048 — so the paper's full 66 × 64 = <b>4,224
 tiles</b> are reproduced exactly, with <b>no resampling at any stage</b>. The U-Net-Auto
-pipeline reaches <b class="good">96.69%</b> on original imagery (paper 90.18%,
-<span class="good">+6.51 pt</span>) and <b class="good">99.97%</b> on thin-cloud/shadow
-filtered (paper 98.97%, <span class="good">+1.00 pt</span>). Cloud-stratified: orig
-95.31% / 97.62% high/low cloud, filtered 99.95% / 99.98%, with all 845 test tiles
+pipeline reaches <b class="good">96.37%</b> on original imagery (paper 90.18%,
+<span class="good">+6.19 pt</span>) and <b class="good">99.84%</b> on thin-cloud/shadow
+filtered (paper 98.97%, <span class="good">+0.87 pt</span>). Cloud-stratified: orig
+94.45% / 97.67% high/low cloud, filtered 99.72% / 99.92%, with all 845 test tiles
 stratified and none dropped.
 </div>
 <p><b>Two things to take from this, in order of importance.</b></p>
@@ -57,13 +57,14 @@ target are self-consistent by construction; the paper's pipeline does not have t
 Every Δ in this report carries that caveat. The filtered branch sits near ceiling for the same
 reason, amplified — see <a href="#labels">§3</a>.</li>
 <li><b>The dataset change barely moved the numbers.</b> An earlier run on a 63-scene Google
-Earth Engine export resized 2000→2048 scored 96.25% / 99.76% — within a point of this run.
-That retires the concern that the older results were an artifact of an incomplete, resampled
-export, and validates the <code>--scene-size 0</code> path.</li>
+Earth Engine export resized 2000→2048 scored 96.25% / 99.76%, and run0003 on this same
+dataset scored 96.69% / 99.84% — all within a point of each other. That retires the concern
+that the older results were an artifact of an incomplete, resampled export, and puts a
+~0.3 pt figure on unseeded run-to-run variance (run0003 vs run0004, identical inputs).</li>
 </ol>
 <p>What reproduces cleanly is the paper's <em>qualitative</em> claim: thin-cloud/shadow
 filtering lifts every class to near-ceiling accuracy. What does not reproduce is the
-<em>magnitude</em> of that lift (+3.28 pt for us vs +8.79 pt for the paper), simply because our
+<em>magnitude</em> of that lift (+3.47 pt for us vs +8.79 pt for the paper), simply because our
 unfiltered baseline starts far higher and has less room to gain.</p>
 
 <h2>2. Side-by-side vs. the paper</h2>
@@ -74,15 +75,15 @@ cannot be reproduced at all.</p>
 <h3>2.1 Table IV — overall accuracy</h3>
 <table>
 <tr><th>Condition</th><th class="n">Paper</th><th class="n">Ours</th><th class="n">Δ</th></tr>
-<tr><td>Original S2 imagery</td><td class="n">90.18%</td><td class="n good"><b>96.69%</b></td><td class="n good">+6.51</td></tr>
-<tr><td>Thin cloud / shadow filtered</td><td class="n">98.97%</td><td class="n good"><b>99.97%</b></td><td class="n good">+1.00</td></tr>
+<tr><td>Original S2 imagery</td><td class="n">90.18%</td><td class="n good"><b>96.37%</b></td><td class="n good">+6.19</td></tr>
+<tr><td>Thin cloud / shadow filtered</td><td class="n">98.97%</td><td class="n good"><b>99.84%</b></td><td class="n good">+0.87</td></tr>
 </table>
 
 <h3>2.2 Table IV — precision / recall / F1 (micro-averaged, %)</h3>
 <table>
 <tr><th>Condition</th><th class="n">Paper P / R / F1</th><th class="n">Ours P / R / F1</th></tr>
-<tr><td>Original</td><td class="n">91.14 / 91.05 / 91.10</td><td class="n good">96.70 / 96.69 / 96.70</td></tr>
-<tr><td>Filtered</td><td class="n">98.88 / 91.87 / 91.89</td><td class="n good">99.97 / 99.97 / 99.97</td></tr>
+<tr><td>Original</td><td class="n">91.14 / 91.05 / 91.10</td><td class="n good">96.35 / 96.34 / 96.34</td></tr>
+<tr><td>Filtered</td><td class="n">98.88 / 91.87 / 91.89</td><td class="n good">99.84 / 99.84 / 99.84</td></tr>
 </table>
 <p class="meta">⚠️ The paper's filtered recall/F1 (91.87 / 91.89) are inconsistent with its own
 98.97% accuracy and appear to be a typo. Ours are internally consistent.</p>
@@ -90,16 +91,16 @@ cannot be reproduced at all.</p>
 <h3>2.3 Table V — cloud/shadow-stratified accuracy</h3>
 <table>
 <tr><th>Stratum</th><th>Condition</th><th class="n">Paper</th><th class="n">Ours</th><th class="n">Δ</th></tr>
-<tr><td>≥10% cloud/shadow</td><td>original</td><td class="n">79.91%</td><td class="n good"><b>95.31%</b></td><td class="n good">+15.40</td></tr>
-<tr><td>≥10% cloud/shadow</td><td>filtered</td><td class="n">99.28%</td><td class="n good"><b>99.95%</b></td><td class="n good">+0.67</td></tr>
-<tr><td>&lt;10% cloud/shadow</td><td>original</td><td class="n">93.60%</td><td class="n good"><b>97.62%</b></td><td class="n good">+4.02</td></tr>
-<tr><td>&lt;10% cloud/shadow</td><td>filtered</td><td class="n">98.87%</td><td class="n good"><b>99.98%</b></td><td class="n good">+1.11</td></tr>
+<tr><td>≥10% cloud/shadow</td><td>original</td><td class="n">79.91%</td><td class="n good"><b>94.45%</b></td><td class="n good">+14.54</td></tr>
+<tr><td>≥10% cloud/shadow</td><td>filtered</td><td class="n">99.28%</td><td class="n good"><b>99.72%</b></td><td class="n good">+0.44</td></tr>
+<tr><td>&lt;10% cloud/shadow</td><td>original</td><td class="n">93.60%</td><td class="n good"><b>97.67%</b></td><td class="n good">+4.07</td></tr>
+<tr><td>&lt;10% cloud/shadow</td><td>filtered</td><td class="n">98.87%</td><td class="n good"><b>99.92%</b></td><td class="n good">+1.05</td></tr>
 </table>
 <p>All <b>845</b> test tiles are stratified (340 high-cloud / 505 low-cloud),
 <code>dropped_no_fraction=0</code> — no tile is excluded, so neither column is biased by a
 partial test set.</p>
 <p><b>Key divergence.</b> The paper's largest filter benefit is on ≥10%-cloud <em>original</em>
-imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy already starts at 95.31%,
+imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy already starts at 94.45%,
 so our gain there is much smaller — same root cause as §1, self-consistent labels let the model
 fit cloudy raw tiles better than the paper's pipeline could.</p>
 
@@ -110,38 +111,38 @@ fit cloudy raw tiles better than the paper's pipeline could.</p>
 <tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n good">95.30%</td><td class="n">3.92%</td><td class="n">0.78%</td></tr>
 <tr><td>thick ice</td><td class="n">24.05%</td><td class="n">75.95%</td><td class="n">0.00%</td></tr>
 <tr><td>open water</td><td class="n">7.58%</td><td class="n">0.24%</td><td class="n">92.18%</td></tr>
-<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n">94.61%</td><td class="n">4.62%</td><td class="n">0.77%</td></tr>
-<tr><td>thick ice</td><td class="n">3.15%</td><td class="n good">96.85%</td><td class="n">0.00%</td></tr>
-<tr><td>open water</td><td class="n">8.95%</td><td class="n">0.07%</td><td class="n">90.98%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n">92.47%</td><td class="n">4.21%</td><td class="n">3.31%</td></tr>
+<tr><td>thick ice</td><td class="n">4.45%</td><td class="n good">95.55%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">4.09%</td><td class="n">0.07%</td><td class="n good">95.84%</td></tr>
 </table>
 <h4 style="margin:14px 0 4px;color:var(--muted);font-size:.95rem">≥10% cloud · filtered</h4>
 <table><tr><th>Source</th><th>True \ Pred</th><th class="n">thin ice</th><th class="n">thick ice</th><th class="n">open water</th></tr>
 <tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n good">98.90%</td><td class="n">1.01%</td><td class="n">0.09%</td></tr>
 <tr><td>thick ice</td><td class="n">0.49%</td><td class="n good">99.51%</td><td class="n">0.00%</td></tr>
 <tr><td>open water</td><td class="n">2.16%</td><td class="n">0.00%</td><td class="n good">97.84%</td></tr>
-<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n good">99.88%</td><td class="n">0.12%</td><td class="n">0.00%</td></tr>
-<tr><td>thick ice</td><td class="n">0.04%</td><td class="n good">99.96%</td><td class="n">0.00%</td></tr>
-<tr><td>open water</td><td class="n">0.00%</td><td class="n">0.00%</td><td class="n good">100.00%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n good">99.53%</td><td class="n">0.47%</td><td class="n">0.00%</td></tr>
+<tr><td>thick ice</td><td class="n">0.26%</td><td class="n good">99.74%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">0.01%</td><td class="n">0.00%</td><td class="n good">99.99%</td></tr>
 </table>
 <h4 style="margin:14px 0 4px;color:var(--muted);font-size:.95rem"><10% cloud · original</h4>
 <table><tr><th>Source</th><th>True \ Pred</th><th class="n">thin ice</th><th class="n">thick ice</th><th class="n">open water</th></tr>
 <tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n">85.74%</td><td class="n">13.56%</td><td class="n">0.70%</td></tr>
 <tr><td>thick ice</td><td class="n">1.43%</td><td class="n good">98.57%</td><td class="n">0.00%</td></tr>
 <tr><td>open water</td><td class="n">2.98%</td><td class="n">0.04%</td><td class="n good">96.98%</td></tr>
-<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n">88.04%</td><td class="n">11.45%</td><td class="n">0.51%</td></tr>
-<tr><td>thick ice</td><td class="n">1.09%</td><td class="n good">98.91%</td><td class="n">0.00%</td></tr>
-<tr><td>open water</td><td class="n">1.06%</td><td class="n">0.05%</td><td class="n good">98.89%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n">89.14%</td><td class="n">9.92%</td><td class="n">0.94%</td></tr>
+<tr><td>thick ice</td><td class="n">1.26%</td><td class="n good">98.74%</td><td class="n">0.00%</td></tr>
+<tr><td>open water</td><td class="n">0.96%</td><td class="n">0.06%</td><td class="n good">98.98%</td></tr>
 </table>
 <h4 style="margin:14px 0 4px;color:var(--muted);font-size:.95rem"><10% cloud · filtered</h4>
 <table><tr><th>Source</th><th>True \ Pred</th><th class="n">thin ice</th><th class="n">thick ice</th><th class="n">open water</th></tr>
 <tr><td rowspan="3"><b>Paper</b></td><td>thin ice</td><td class="n good">97.92%</td><td class="n">1.99%</td><td class="n">0.09%</td></tr>
 <tr><td>thick ice</td><td class="n">0.88%</td><td class="n good">99.12%</td><td class="n">0.00%</td></tr>
 <tr><td>open water</td><td class="n">1.21%</td><td class="n">0.00%</td><td class="n good">98.79%</td></tr>
-<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n good">99.62%</td><td class="n">0.38%</td><td class="n">0.00%</td></tr>
-<tr><td>thick ice</td><td class="n">0.01%</td><td class="n good">99.99%</td><td class="n">0.00%</td></tr>
+<tr><td rowspan="3"><b>Ours</b></td><td>thin ice</td><td class="n good">99.22%</td><td class="n">0.78%</td><td class="n">0.00%</td></tr>
+<tr><td>thick ice</td><td class="n">0.08%</td><td class="n good">99.92%</td><td class="n">0.00%</td></tr>
 <tr><td>open water</td><td class="n">0.00%</td><td class="n">0.00%</td><td class="n good">100.00%</td></tr>
 </table>
-<p><b>What the matrices show.</b> Under ≥10% cloud/shadow on <em>original</em> imagery the paper's model sends <b class="bad">24.05%</b> of thick ice → thin (75.95% thick recall) — its signature cloud-shadow error, where shadowed thick ice reads as thin. We show the <em>same</em> error in the same direction but far smaller — 3.15% thick → thin, leaving thick-ice recall at <b class="good">96.85%</b>. Filtering collapses nearly every off-diagonal below 0.2% in both the paper and ours, which is the paper's central qualitative claim.</p>
+<p><b>What the matrices show.</b> Under ≥10% cloud/shadow on <em>original</em> imagery the paper's model sends <b class="bad">24.05%</b> of thick ice → thin (75.95% thick recall) — its signature cloud-shadow error, where shadowed thick ice reads as thin. We show the <em>same</em> error in the same direction but far smaller — 4.45% thick → thin, leaving thick-ice recall at <b class="good">95.55%</b>. Filtering collapses every off-diagonal to at most 0.78% in our run, against the paper's largest filtered off-diagonal of 2.16% — the paper's central qualitative claim.</p>
 
 <h3>2.5 Paper-claim coverage</h3>
 <table>

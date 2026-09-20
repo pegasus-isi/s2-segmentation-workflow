@@ -2,7 +2,7 @@
 
 ## 0. Side-by-side vs. the paper
 
-One run of the **U-Net-Auto** pipeline in the paper's described configuration (**run0003 — authors' 66-scene dataset**, scene-scale thin-cloud/shadow filter). Every comparison below is against the paper's **U-Net-Auto** column; the manually-labeled **U-Net-Man** results are out of scope (see §0.5).
+One run of the **U-Net-Auto** pipeline in the paper's described configuration (**run0004 — authors' 66-scene dataset**, scene-scale thin-cloud/shadow filter). Every comparison below is against the paper's **U-Net-Auto** column; the manually-labeled **U-Net-Man** results are out of scope (see §0.5).
 
 > **Dataset.** The authors' own **66 scenes**, supplied directly and natively 2048x2048, tiled into the paper's full 66 x 64 = **4,224 tiles** (3,379 train / 845 test) with **no resampling at any stage**. This is the paper's dataset, not an approximation of it.
 
@@ -10,8 +10,8 @@ One run of the **U-Net-Auto** pipeline in the paper's described configuration (*
 
 | Condition | Paper | Ours | Δ |
 |---|:--:|:--:|:--:|
-| Original S2 imagery | 90.18% | **96.69%** | +6.51 |
-| Thin cloud / shadow filtered | 98.97% | **99.97%** | +1.00 |
+| Original S2 imagery | 90.18% | **96.37%** | +6.19 |
+| Thin cloud / shadow filtered | 98.97% | **99.84%** | +0.87 |
 
 We exceed the paper on both conditions. The margin is **not** evidence of a better reproduction: our auto-labels are self-consistent — the U-Net is scored against labels produced by color-segmenting the very tiles it sees — so the task is easier than the paper's, which scores against an independently derived reference. Training is also unseeded beyond the split (`random_state=0`), which historically contributes ~1 pt of run-to-run noise. See §0.6.
 
@@ -19,8 +19,8 @@ We exceed the paper on both conditions. The margin is **not** evidence of a bett
 
 | Condition | Paper P / R / F1 | Ours P / R / F1 |
 |---|:--:|:--:|
-| Original | 91.14 / 91.05 / 91.10 | 96.70 / 96.69 / 96.70 |
-| Filtered | 98.88 / 91.87 / 91.89 | 99.97 / 99.97 / 99.97 |
+| Original | 91.14 / 91.05 / 91.10 | 96.35 / 96.34 / 96.34 |
+| Filtered | 98.88 / 91.87 / 91.89 | 99.84 / 99.84 / 99.84 |
 
 > ⚠️ The paper's filtered U-Net-Auto P/R/F1 reads **98.88 / 91.87 / 91.89** — the recall and F1 are inconsistent with its own 98.97% accuracy and appear to be a typo. Ours are internally consistent.
 
@@ -28,14 +28,14 @@ We exceed the paper on both conditions. The margin is **not** evidence of a bett
 
 | Stratum | Condition | Paper | Ours | Δ |
 |---|---|:--:|:--:|:--:|
-| ≥10% cloud/shadow | orig | 79.91% | **95.31%** | +15.40 |
-| ≥10% cloud/shadow | filtered | 99.28% | **99.95%** | +0.67 |
-| <10% cloud/shadow | orig | 93.60% | **97.62%** | +4.02 |
-| <10% cloud/shadow | filtered | 98.87% | **99.98%** | +1.11 |
+| ≥10% cloud/shadow | orig | 79.91% | **94.45%** | +14.54 |
+| ≥10% cloud/shadow | filtered | 99.28% | **99.72%** | +0.44 |
+| <10% cloud/shadow | orig | 93.60% | **97.67%** | +4.07 |
+| <10% cloud/shadow | filtered | 98.87% | **99.92%** | +1.05 |
 
 All **845** test tiles are stratified (340 high-cloud / 505 low-cloud), `dropped_no_fraction=0` — no tile is excluded, so neither column is biased by a partial test set.
 
-**Key divergence from the paper:** the paper's largest filter benefit is on ≥10%-cloud *original* imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy is already high (95.31%), so our filter gain there is much smaller. Same root cause as §0.1 — self-consistent labels let the model fit cloudy raw tiles better than the paper's pipeline could.
+**Key divergence from the paper:** the paper's largest filter benefit is on ≥10%-cloud *original* imagery (79.91% → 99.28%, +19 pt). Our original high-cloud accuracy is already high (94.45%), so our filter gain there is much smaller. Same root cause as §0.1 — self-consistent labels let the model fit cloudy raw tiles better than the paper's pipeline could.
 
 ### 0.4 Fig 13 — confusion matrices (U-Net-Auto)
 
@@ -48,9 +48,9 @@ Row-normalized percentages, rows = true class, cols = predicted, in the paper's 
 Paper  thin        95.30%   3.92%   0.78%
        thick       24.05%  75.95%   0.00%
        water        7.58%   0.24%  92.18%
-Ours   thin        94.61%   4.62%   0.77%
-       thick        3.15%  96.85%   0.00%
-       water        8.95%   0.07%  90.98%
+Ours   thin        92.47%   4.21%   3.31%
+       thick        4.45%  95.55%   0.00%
+       water        4.09%   0.07%  95.84%
 ```
 
 **≥10% cloud/shadow · filtered  (paper: "cloud-shadow-removed")**
@@ -60,9 +60,9 @@ Ours   thin        94.61%   4.62%   0.77%
 Paper  thin        98.90%   1.01%   0.09%
        thick        0.49%  99.51%   0.00%
        water        2.16%   0.00%  97.84%
-Ours   thin        99.88%   0.12%   0.00%
-       thick        0.04%  99.96%   0.00%
-       water        0.00%   0.00% 100.00%
+Ours   thin        99.53%   0.47%   0.00%
+       thick        0.26%  99.74%   0.00%
+       water        0.01%   0.00%  99.99%
 ```
 
 **<10% cloud/shadow · original  (paper: "cloud-shadow-free")**
@@ -72,9 +72,9 @@ Ours   thin        99.88%   0.12%   0.00%
 Paper  thin        85.74%  13.56%   0.70%
        thick        1.43%  98.57%   0.00%
        water        2.98%   0.04%  96.98%
-Ours   thin        88.04%  11.45%   0.51%
-       thick        1.09%  98.91%   0.00%
-       water        1.06%   0.05%  98.89%
+Ours   thin        89.14%   9.92%   0.94%
+       thick        1.26%  98.74%   0.00%
+       water        0.96%   0.06%  98.98%
 ```
 
 **<10% cloud/shadow · filtered**
@@ -84,12 +84,12 @@ Ours   thin        88.04%  11.45%   0.51%
 Paper  thin        97.92%   1.99%   0.09%
        thick        0.88%  99.12%   0.00%
        water        1.21%   0.00%  98.79%
-Ours   thin        99.62%   0.38%   0.00%
-       thick        0.01%  99.99%   0.00%
+Ours   thin        99.22%   0.78%   0.00%
+       thick        0.08%  99.92%   0.00%
        water        0.00%   0.00% 100.00%
 ```
 
-**What the matrices show.** Under ≥10% cloud/shadow on *original* imagery the paper's model sends **24.05% of thick ice → thin** (75.95% thick recall) — its signature cloud-shadow error, where shadowed thick ice reads as thin. We show the *same* error in the same direction but far smaller — 3.15% thick → thin, leaving thick-ice recall at 96.85%. Filtering collapses nearly every off-diagonal below 0.2% in both the paper and ours — the paper's central qualitative claim, and it reproduces.
+**What the matrices show.** Under ≥10% cloud/shadow on *original* imagery the paper's model sends **24.05% of thick ice → thin** (75.95% thick recall) — its signature cloud-shadow error, where shadowed thick ice reads as thin. We show the *same* error in the same direction but far smaller: 4.45% thick → thin, leaving thick-ice recall at 95.55%. Filtering collapses every off-diagonal to at most 0.78% in our run, against the paper's largest filtered off-diagonal of 2.16% — the paper's central qualitative claim, and it reproduces.
 
 ### 0.5 Paper-claim coverage — what is and isn't compared
 
@@ -116,14 +116,14 @@ See [`gap_analysis.md`](gap_analysis.md) for the full audit of these not-compare
 
 - **The dataset is no longer a confound.** This run uses the authors' own 66 scenes at their native 2048x2048, so the paper's 4,224 tiles are reproduced exactly and nothing is resampled. An earlier run on a 63-scene Google Earth Engine export resized 2000->2048 scored 96.25% / 99.76% — within a point of this one, which retires the worry that the older numbers were an artifact of that incomplete export.
 - **Our margin over the paper is a labeling artifact, not an improvement.** Both our branches are scored against auto-labels derived from the same tiles the U-Net consumes, so input and target are self-consistent by construction. The paper's pipeline does not have that property. This is the single most important caveat on every Delta in this report.
-- **The filtered branch sits near ceiling (~99.97%) for the same reason**, amplified: `--filtered-labels filtered` re-derives labels from the filtered tiles. Running `--filtered-labels raw` instead scores filtered inputs against raw-scene labels and lands around 90%, which is the more honest cross-comparison.
+- **The filtered branch sits near ceiling (~99.84%) for the same reason**, amplified: `--filtered-labels filtered` re-derives labels from the filtered tiles. Running `--filtered-labels raw` instead scores filtered inputs against raw-scene labels and lands around 90%, which is the more honest cross-comparison.
 - **Training is unseeded beyond the split.** Only `random_state=0` fixes the train/test partition; weight init and dropout vary run to run, historically worth ~1 pt of overall accuracy and considerably more on thin-ice recall. Treat sub-point differences as noise.
 
 ---
 
-The sections below pair each paper figure with the matching output from **run0003 — authors' 66-scene dataset**, side by side.
+The sections below pair each paper figure with the matching output from **run0004 — authors' 66-scene dataset**, side by side.
 
-**Run (figures below):** `run0003 — authors' 66-scene dataset` &nbsp;·&nbsp; **Paper:** Iqrah, Wang, Xie, Prasad — *"A Parallel Workflow for Polar Sea-Ice Classification using Auto-labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024.  
+**Run (figures below):** `run0004 — authors' 66-scene dataset` &nbsp;·&nbsp; **Paper:** Iqrah, Wang, Xie, Prasad — *"A Parallel Workflow for Polar Sea-Ice Classification using Auto-labeling of Sentinel-2 Imagery,"* IEEE IPDPSW 2024.  
 **Model:** U-Net-Auto (color-segmentation auto-labels — the paper's auto-labeled U-Net, *not* the manually-labeled U-Net-Man).
 
 **Conditions** (matching the paper's Table IV rows):
@@ -136,34 +136,34 @@ This report is generated by `compare_with_paper.py`. Re-run after a new training
 
 ## 1. Headline metrics (paper Table IV)
 
-| Condition | Paper (U-Net-Auto) | **Ours — run0003 — authors' 66-scene dataset** | Δ |
+| Condition | Paper (U-Net-Auto) | **Ours — run0004 — authors' 66-scene dataset** | Δ |
 |---|:--:|:--:|:--:|
-| Original S2 imagery | 90.18% | **96.69%** | +6.51 pt |
-| Thin cloud / shadow filtered | 98.97% | **99.97%** | +1.00 pt |
+| Original S2 imagery | 90.18% | **96.37%** | +6.19 pt |
+| Thin cloud / shadow filtered | 98.97% | **99.84%** | +0.87 pt |
 
 Detailed F1 / precision / recall (Keras micro-averaged):
 
 | Dataset (paper Table IV) | Accuracy | F1 | Precision | Recall | Train time |
 |---|:--:|:--:|:--:|:--:|:--:|
-| Original S2 imagery | 96.69% | 0.9670 | 0.9670 | 0.9669 | 2097.0 s |
-| Thin cloud / shadow-filtered S2 imagery | 99.97% | 0.9997 | 0.9997 | 0.9997 | 982.4 s |
+| Original S2 imagery | 96.37% | 0.9634 | 0.9635 | 0.9634 | 2092.0 s |
+| Thin cloud / shadow-filtered S2 imagery | 99.84% | 0.9984 | 0.9984 | 0.9984 | 976.9 s |
 
-## 2. Per-class metrics (run0003 — authors' 66-scene dataset)
+## 2. Per-class metrics (run0004 — authors' 66-scene dataset)
 
 ### Original S2 imagery
 
 | Class | Precision | Recall | F1 | Support |
 |---|:--:|:--:|:--:|--:|
-| Thin ice | 0.924 | 0.925 | 0.925 | 12,131,586 |
-| Thick ice | 0.974 | 0.982 | 0.978 | 31,863,473 |
-| Open water | 0.993 | 0.970 | 0.981 | 11,382,861 |
+| Thin ice | 0.921 | 0.914 | 0.917 | 12,131,586 |
+| Thick ice | 0.977 | 0.976 | 0.976 | 31,863,473 |
+| Open water | 0.973 | 0.982 | 0.978 | 11,382,861 |
 
 ### Thin cloud / shadow-filtered S2 imagery
 
 | Class | Precision | Recall | F1 | Support |
 |---|:--:|:--:|:--:|--:|
-| Thin ice | 0.999 | 0.998 | 0.999 | 6,025,036 |
-| Thick ice | 1.000 | 1.000 | 1.000 | 37,970,023 |
+| Thin ice | 0.991 | 0.995 | 0.993 | 6,025,036 |
+| Thick ice | 0.999 | 0.999 | 0.999 | 37,970,023 |
 | Open water | 1.000 | 1.000 | 1.000 | 11,382,861 |
 
 ## 3. Side-by-side figures
@@ -178,7 +178,7 @@ _Fig. 5 — Thin cloud / shadow-filtered dataset (a/b/c original, d/e/f filtered
 
 _fig5_filtered_
 
-**Ours — run0003 — authors' 66-scene dataset:**
+**Ours — run0004 — authors' 66-scene dataset:**
 
 | &nbsp; | &nbsp; | &nbsp; |
 |:---:|:---:|:---:|
@@ -197,7 +197,7 @@ _Fig. 13 — Confusion matrices for U-Net-Man (top) and U-Net-Auto (bottom) acro
 
 _fig13_confusion_
 
-**Ours — run0003 — authors' 66-scene dataset:**
+**Ours — run0004 — authors' 66-scene dataset:**
 
 | &nbsp; | &nbsp; |
 |:---:|:---:|
@@ -216,7 +216,7 @@ _Fig. 14 — Side-by-side: original S2, manually-labeled ground truth, U-Net-Man
 
 _fig14_predictions_
 
-**Ours — run0003 — authors' 66-scene dataset:**
+**Ours — run0004 — authors' 66-scene dataset:**
 
 | &nbsp; | &nbsp; |
 |:---:|:---:|
@@ -235,7 +235,7 @@ _Fig. 14 — Side-by-side: original S2, manually-labeled ground truth, U-Net-Man
 
 _fig14_predictions_
 
-**Ours — run0003 — authors' 66-scene dataset:**
+**Ours — run0004 — authors' 66-scene dataset:**
 
 | &nbsp; | &nbsp; |
 |:---:|:---:|
@@ -254,7 +254,7 @@ _Table IV — U-Net-Man vs U-Net-Auto accuracy on original and filtered S2 image
 
 _table4_metrics_
 
-**Ours — run0003 — authors' 66-scene dataset:**
+**Ours — run0004 — authors' 66-scene dataset:**
 
 | &nbsp; | &nbsp; |
 |:---:|:---:|
@@ -265,12 +265,12 @@ See §2 above for the per-class numeric comparison.
 
 ## 4. Conclusions
 
-- **Original S2 imagery (U-Net-Auto):** 96.69% accuracy vs paper's 90.18% (+6.51 pt).
-- **Thin cloud / shadow-filtered S2 imagery (U-Net-Auto):** 99.97% accuracy vs paper's 98.97% (+1.00 pt).
-- **Filtering helps us less than it helped the paper:** our original→filtered swing is +3.28 pt against the paper's +8.79 pt (90.18% → 98.97%). The direction reproduces; the magnitude does not, because our unfiltered baseline already starts 6.51 pt above the paper's and so has far less room to gain. Both effects trace to the same cause — self-consistent auto-labels (§0.6).
+- **Original S2 imagery (U-Net-Auto):** 96.37% accuracy vs paper's 90.18% (+6.19 pt).
+- **Thin cloud / shadow-filtered S2 imagery (U-Net-Auto):** 99.84% accuracy vs paper's 98.97% (+0.87 pt).
+- **Filtering helps us less than it helped the paper:** our original→filtered swing is +3.47 pt against the paper's +8.79 pt (90.18% → 98.97%). The direction reproduces; the magnitude does not, because our unfiltered baseline already starts 6.19 pt above the paper's and so has far less room to gain. Both effects trace to the same cause — self-consistent auto-labels (§0.6).
 - **Read every Δ above with that caveat.** Exceeding the paper here is a property of how the labels are made, not evidence of a better model.
 
 See `comparison_report.html` for the styled long-form discussion of methodology, code review, and remaining differences.
 
 ---
-_Generated by `compare_with_paper.py` from output_run0003_authors and A_Parallel_Workflow_for_Polar_Sea-Ice_Classification_Using_Auto-Labeling_of_Sentinel-2_Imagery.pdf._
+_Generated by `compare_with_paper.py` from output_run0004 and A_Parallel_Workflow_for_Polar_Sea-Ice_Classification_Using_Auto-Labeling_of_Sentinel-2_Imagery.pdf._
