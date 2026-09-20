@@ -160,3 +160,74 @@
 - **Files created**: 4 (bin/generate_plots.py, generate_workflow_diagram.py, .gitignore, ~/.claude/skills/gpg-commit/gpg-sign-wrapper.sh)
 - **Files modified**: 8 (workflow_generator.py, run_manual.sh, README.md, specification.md, Docker/S2_Dockerfile, cc-usage-log.md, ~/.claude/skills/gpg-commit/SKILL.md, images/workflow.png)
 ---
+
+---
+### Session: 2026-09-17 12:54 → 2026-09-20 (authors' 66-scene dataset)
+- **Workflow(s)**: s2-segmentation-workflow
+- **Prompts**: 19
+- **Summary of prompts**:
+  1. Author supplied source data (S2_tiff, s2_original_2048, S2_data_training) + Fig 5 feedback
+  2. What changes does the workflow need based on that data?
+  3. Make it match the paper; drop the 63-scene framing that came from our own GEE export
+  4. Update README with reproduction instructions; where to host the dataset?
+  5. How do I publish to Zenodo?
+  6. Is comparison*.md updated?
+  7. Make the comparison clearly paper vs the run
+  8. Commit, push, transfer data+workflow to pegasus, run the workflow
+  9. Remove obsolete content from the reports
+  10. Merge to main
+  11. Confusion matrix — are we not using percentages?
+  12. Use the paper's colors for the images
+  13. Ours doesn't show percentages
+  14. (clarified) colors meant prediction samples, paper Fig 14
+  15. Re-run the workflow to regenerate the images
+  16. Was the re-run started with job clustering?
+  17. Check workflow status
+  18. Verify the transcribed confusion matrices, then update the report to run0004
+  19. bye
+- **Key actions**:
+  - Verified the authors' data empirically: `train_images_4032` is the pixel-exact raw split of
+    `s2_original_2048`; our `color_segment.py` reproduces their labels (98.26% mean pixel
+    agreement, 2,997/4,032 tiles exact). Found their label set has **mixed provenance** — 11 of
+    63 scenes match the filtered path, and cloud fraction does not explain the split
+  - Closed the 63-vs-66 gap: `--original-size` default 2000→2048, `download_data.py` exports at
+    2048, docs corrected (63/4032 was an artifact of our incomplete GEE export, not the paper)
+  - Fixed tile-count reporting bug (summary used `--original-size` while the DAG used
+    `--scene-size`, reporting 49 tiles/scene against an actual 64)
+  - New: `prepare_author_data.sh` (ZIP64-safe fetch/unpack/verify), `publish_to_zenodo.py` +
+    `zenodo_metadata.json` (streamed bucket upload, checksum-verified)
+  - Diagnosed the container failure that stalled run0001: the published image is an OCI **image
+    index** (BuildKit attestations), which Pegasus stages as an OCI tar named `.simg` that
+    Apptainer cannot open. Surfaced as a missing output file, and as **170 held jobs with
+    `FAILURE 0`**. Added local-SIF support to `--container-image` + a README troubleshooting section
+  - Enabled label-based job clustering — the per-scene `label` profiles existed but nothing
+    consumed them. 10,142 DAG nodes → 300; container staged ~66× instead of ~9,000
+  - Ran the paper's full dataset end-to-end twice (run0003, run0004): 66 scenes / 4,224 tiles,
+    300/300 jobs, 0 failures, 0 held
+  - Rewrote the comparison as a single clean paper-vs-ours side-by-side (numbers + paired images);
+    removed the legacy 63-scene runs and four stale hand-built `cm_run*.json` caches that were
+    presenting a previous run's matrices as the current one
+  - Matched the paper's figures: confusion matrices in percentage format, prediction samples in
+    the paper's red/blue/green palette with its legend; both now also emit `*_confusion_matrix.json`
+- **Outcome**: First reproduction on the authors' own data. Table IV orig **96.37%** (paper
+  90.18%), filtered **99.84%** (paper 98.97%); Table V orig 94.45%/97.67%, filtered 99.72%/99.92%,
+  all 845 test tiles stratified. The headline barely moves across the 63-scene resampled export,
+  run0003 and run0004 (all within ~1 pt), so the dataset question that started this work is
+  settled, and run0003-vs-run0004 puts ~0.3 pt on unseeded run-to-run variance. The ~6 pt edge
+  over the paper remains a self-consistent-labeling artifact, now stated wherever a Δ appears.
+- **Models used**: Opus 5 (claude-opus-5, 1M context)
+- **Commits**: 12 (all GPG-signed, merged to `main`)
+- **Files created**: 3 (prepare_author_data.sh, publish_to_zenodo.py, zenodo_metadata.json)
+- **Files modified**: 12 (README.md, SPEC.md, gap_analysis.md, comparison_report.md,
+  comparison_report.html, compare_with_paper.py, workflow_generator.py, download_data.py,
+  prepare_and_run.sh, bin/generate_plots.py, bin/evaluate_stratified.py, .gitignore)
+- **Files deleted**: 7 (4 stale cm_run*.json caches, 3 superseded paper_figures/ours/*.png)
+- **Diff vs session start**: 30 files changed, 1,269 insertions, 1,024 deletions
+- **Tool calls / token counts / cost**: not exactly tracked by the harness this session; not
+  estimated here rather than reported inaccurately
+- **Known-open items**: Zenodo record not yet published (`creators` still a placeholder, README
+  has a `<base-url>` placeholder); the container SIF is host-local to pegasus (durable fix is
+  rebuilding the image with `--provenance=false --sbom=false`); the confusion-matrix JSON
+  stage-out fix (11044cd) is unproven until the next run; the per-tile-filter variant has not
+  been re-run on the authors' dataset
+---
