@@ -4,69 +4,108 @@ A [Pegasus WMS](https://pegasus.isi.edu/) workflow for **Sentinel-2 satellite se
 
 ## Pipeline Overview
 
-The workflow combines two stages into an end-to-end DAG. **The defaults reproduce the
-reference paper's configuration exactly** — running with no optional flags is the canonical
-paper reproduction (see [Reproducing the Paper](#reproducing-the-paper)).
+The workflow is a single end-to-end DAG in three stages. Stage 1 builds two parallel sets of
+training tiles — one from the raw scenes (`orig`) and one from thin-cloud/shadow-filtered
+scenes (`filtered`) — and Stage 2 trains, evaluates and runs inference for each. **The
+defaults reproduce the reference paper's configuration exactly** — running with no optional
+flags is the canonical paper reproduction (see [Reproducing the Paper](#reproducing-the-paper)).
 
 **Stage 0 — Scene normalization**
 
 0. **resize_image** — Resizes every input scene to 2048×2048 (the paper's scene geometry; 2048 divides evenly by 256, so no edge padding ever enters the labels). One job per scene. Disable with `--scene-size 0` to keep the native size (edge tiles are then padded — masks with the open-water value, so padding cannot become a phantom label class).
 
-**Stage 1 — Color Segmentation (Label Generation)**
+**Stage 1 — Color segmentation and auto-labeling**
 
-1. **image_split** — Splits each 2048×2048 scene into 64 tiles of 256×256. One job per source image, all run concurrently.
+One job set per scene; all scenes run concurrently.
+
+*Color segmentation — always runs*
+
+1. **image_split** — Splits each 2048×2048 scene into 64 tiles of 256×256. One job per source image.
 2. **color_segment** — HSV-based color segmentation on each tile (thin-ice/thick-ice/water classification, paper Fig 6). One job per tile — N×64 embarrassingly parallel HTCondor jobs.
 3. **image_merge** — Reassembles 64 segmented tiles back into a full 2048×2048 mask. One merge per source image (fan-in).
 
-**Auto-label Bridge (default; disable with `--no-auto-label`)**
+*Auto-label tile bridge — steps 4–8, on by default, all skipped with `--no-auto-label`*
 
-3b. **split_images** — Splits each 2048×2048 scene into 256×256 grayscale training image tiles. Reuses `image_split` with `--grayscale --pad`. One job per source image.
-3c. **split_masks** — Splits each 2048×2048 merged segmentation mask into 256×256 grayscale mask tiles (same grid as split_images). One job per source image. Together with split_images, these produce matched image/mask tile pairs for Stage 2.
+Turns the segmentation into matched 256×256 U-Net training pairs. With `--no-auto-label`
+none of steps 4–8 are emitted at all — including the entire filtered branch — and Stage 2
+reads pre-existing tiles from `--train-images-dir` / `--train-masks-dir` instead. Pass
+`--no-auto-label` with neither of those directories and the DAG stops after step 3:
+color segmentation only, one merged mask per scene.
 
-**Stage 2 — U-Net Training & Evaluation (optional)**
+4. **split_masks** — Splits the merged mask from step 3 into 256×256 grayscale label tiles. Reuses `image_split` with `--grayscale --pad --pad-value 149` (the open-water gray, so padding cannot become a phantom 4th class).
+5. **split_images** — Splits the *scene* — not the segmented tiles of step 1 — into matching 256×256 grayscale U-Net input tiles. Together with `split_masks` this gives Stage 2 matched image/label pairs for the `orig` branch.
+6. **filter_image** — Starts the `filtered` branch (`--paths both|filtered`; `both` is the default): `only_shadow_cloud_removal` over the whole 2048×2048 scene (paper §III-A, `medianBlur` kernel 155). With `--filter-scale tile` it instead runs once per 256×256 tile, and the kernel auto-shrinks to 19.
+7. **split_images (filtered)** — Tiles the cleaned scene into 256×256 U-Net inputs (`train_imgf_*`).
+8. **color_segment (filtered)** — Color-segments each already-256×256 filtered tile, so it emits the filtered branch's **label** tiles directly — there is no second merge/re-split on this side. This is Option A (`--filtered-labels filtered`, the default): input and target are self-consistent. With `--filtered-labels raw` the branch reuses the `orig` labels from step 4 instead (the honest cross-comparison, ~90%).
 
-4. **preprocess_data** — Loads 256×256 grayscale training images and masks (from auto-label tiles or `--train-images-dir`/`--train-masks-dir`), encodes labels, normalizes (L2, float32), performs 80/20 train/test split. Processes each split separately for memory efficiency. Outputs `.npy` arrays.
-5. **train_unet** — Trains a 6-level U-Net (16→512 filters, 3-class softmax, categorical crossentropy, Adam optimizer). Supports single-GPU, multi-GPU (MirroredStrategy), and multi-node (Horovod) training modes.
-6. **evaluate_model** — Evaluates the trained model on the test set. Outputs loss, accuracy, F1, precision, and recall.
-7. **generate_plots** — Produces publication figures and tables: training curves, confusion matrix (Fig 13), prediction samples (Fig 14), metrics table (Table IV), and per-class metrics JSON.
+*Stratification input — independent of the bridge (`--stratified-eval`, on by default)*
+
+9. **compute_cloud_fraction** — Per-tile cloud/shadow fraction for each scene, read off the same Otsu mask `only_shadow_cloud_removal` computes internally, so "cloud/shadow" means exactly what the filter means by it. One job per scene, emitted whether or not auto-labeling is on; the JSONs ride through `preprocess_data` aligned with `X_test` and drive Table V / Fig 13.
+
+**Stage 2 — U-Net training, evaluation & inference (once per branch)**
+
+10. **preprocess_data** — Loads 256×256 grayscale training images and masks (from auto-label tiles or `--train-images-dir`/`--train-masks-dir`), encodes labels, normalizes (L2, float32), performs an 80/20 train/test split. Processes each split separately for memory efficiency. Outputs `.npy` arrays, plus `test_cloud_fractions.npy` when stratified evaluation is on.
+11. **train_unet** — Trains a 6-level U-Net (16→512 filters, 3-class softmax, categorical crossentropy, Adam optimizer). Supports single-GPU, multi-GPU (MirroredStrategy), and multi-node (Horovod) training modes.
+12. **evaluate_model** — Evaluates the trained model on the full test set. Outputs loss, accuracy, F1, precision, and recall (paper Table IV).
+13. **evaluate_stratified** — Splits the test set at `--cloud-threshold` (default `0.10`) into ≥10% and <10% cloud/shadow strata and evaluates each: confusion matrices, metrics tables, per-class JSON and a `stratified_summary.json` (paper Table V, Fig 13). Disable with `--no-stratified-eval`.
+14. **generate_plots** — Produces publication figures and tables: training curves, confusion matrix (Fig 13), prediction samples (Fig 14), metrics table (Table IV), and per-class metrics JSON.
+15. **infer_unet** — Applies the freshly trained model to whole scenes: tile, classify, merge back into one per-scene sea-ice map (paper Fig 9 / 14). One job per (branch, scene); filtered-branch jobs re-apply `only_shadow_cloud_removal` first so the model sees the distribution it was trained on. Disable with `--no-infer`; choose scenes with `--infer-images`.
 
 ```
-  Image 0                    Image 1                    Image N-1
-  ────────                   ────────                   ─────────
-  image_split_0              image_split_1      ...     image_split_N-1
-  ┌──┬──┬─...─┐              ┌──┬──┬─...─┐              ┌──┬──┬─...─┐
-  seg seg seg seg            seg seg seg seg            seg seg seg seg
-  (0) (1)(2) (63)            (0) (1)(2) (63)            (0) (1)(2) (63)
-  └──┴──┴─...─┘              └──┴──┴─...─┘              └──┴──┴─...─┘
-       │                          │                          │
-  image_merge_0              image_merge_1             image_merge_N-1
-       │                          │                          │
-  [split_masks_0]           [split_masks_1]           [split_masks_N-1]
-  (256x256 mask tiles)      (256x256 mask tiles)      (256x256 mask tiles)
-       │                          │                          │
-  [split_images_0]          [split_images_1]          [split_images_N-1]
-  (256x256 img tiles)       (256x256 img tiles)       (256x256 img tiles)
-       │                          │                          │
-       └──────────────────────────┴──────────────────────────┘
-                              │
-                    (auto-label default: matched image + mask tiles)
-                              │
-                              ▼
-                       preprocess_data
-                              │
-                              ▼
-                         train_unet
-                              │
-                              ▼
-                       evaluate_model
-                              │
-                              ▼
-                       generate_plots
+  ─── Stage 0 + 1 — one job set per scene i, all N scenes concurrent ──────────
+
+                               resize_image_i
+            ┌───────────────┬────────┴───────┬────────────────┐
+            ▼               ▼                ▼                ▼
+      image_split_i   split_images_i   filter_image_i   compute_cloud_
+      ┌──┬──┬─...─┐   (raw 256² imgs)        │           fraction_i
+      seg seg ... seg                        ▼                 │
+      (0)(1)    (63)                  split_images_i           │
+      └──┴──┴─...─┘                   (filt 256² imgs)         │
+            │                                │                 │
+            ▼                                ▼                 │
+      image_merge_i                   color_segment ×64        │
+      (2048² mask)                    (per filtered tile)      │
+            │                                │                 │
+            ▼                                ▼                 │
+      split_masks_i                   filt 256² labels         │
+      (raw 256² labels)                      │                 │
+            │                                │                 │
+  ──────────┴────────────────────────────────┴─────────────────┴─────────────
+       raw imgs + raw labels          filt imgs + filt labels   cloud % → both
+            │                                │
+            ▼                                ▼
+
+  ─── Stage 2 — both branches from one submission ────────────────────────────
+
+       orig branch                          filtered branch
+            │                                      │
+      preprocess_data                        preprocess_data
+            │                                      │
+      train_unet_orig                        train_unet_filtered
+       ┌────┴────┬──────────┐                 ┌────┴────┬──────────┐
+       ▼         ▼          ▼                 ▼         ▼          ▼
+  evaluate_  evaluate_   infer_unet      evaluate_  evaluate_   infer_unet
+  model      stratified  (× N scenes)    model      stratified  --filter
+       │     (Table V,   (Fig 9/14)           │     (Table V,   (× N scenes)
+       ▼      Fig 13)                         ▼      Fig 13)
+  generate_plots                         generate_plots
+  (Fig 13/14, Table IV)                  (Fig 13/14, Table IV)
 ```
 
 ![Workflow DAG](images/workflow.png)
 
-> **Note**: The `split_images_*` and `split_masks_*` jobs (shown in brackets) are part of the default auto-label mode. They produce matched training image/mask tile pairs directly from the source scenes. With `--no-auto-label`, Stage 2 reads pre-existing files from `--train-images-dir` and `--train-masks-dir`.
+> **Note**: `resize_image` is skipped with `--scene-size 0` (use it when the scenes are
+> already 2048×2048, as the authors' are). Color segmentation — `image_split`,
+> `color_segment`, `image_merge` — always runs; it is the tile bridge below it (steps 4–8,
+> the whole `orig` and `filtered` training-pair chain) that `--no-auto-label` removes, and
+> Stage 2 then reads tiles from `--train-images-dir` / `--train-masks-dir`. The filtered
+> column alone disappears with `--paths orig`, and `compute_cloud_fraction` /
+> `evaluate_stratified` with `--no-stratified-eval`.
+>
+> The figure above is generated by `generate_workflow_diagram.py` and was last checked on
+> 2026-09-21 against the planned DAG of run0004 (`pegasus-graphviz workflow.yml`). Re-run it
+> after adding or removing a job type.
 
 ## Project Structure
 
