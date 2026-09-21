@@ -231,3 +231,62 @@
   stage-out fix (11044cd) is unproven until the next run; the per-tile-filter variant has not
   been re-run on the authors' dataset
 ---
+
+---
+### Session: 2026-09-21 (author-meeting slide deck)
+- **Workflow(s)**: s2-segmentation-workflow
+- **Prompts**: 4 (the second a retyped/corrected version of the first; then a font-size +
+  DAG-currency request, then a question about figure colours)
+- **Summary of prompts**: (1-2) "create a slide deck for the results and reproducibility
+  meeting authors to discuss"; (3) "make sure the font size is no less than 16 ... is the dag
+  diagram current, can you generate the graphviz on the server and compare"; (4) "are the
+  images correct, as i asked for using similar colors?"
+- **Key actions**:
+  - Read `comparison_report.md`, `gap_analysis.md` and the reproduction sections of `README.md`
+    as the source of every figure in the deck; no new runs or code changes
+  - Built a 15-slide deck as a Slides Artifact (claude.ai/artifact/DaTzr2dUZ8RZN4uTLaAM4r):
+    cover, agenda, DAG overview, dataset, Table IV, Table V, Fig 13, the labeling caveat,
+    run-to-run variance, qualitative figures, coverage matrix, the three gaps, six questions
+    for the authors, the four-command reproduction, and the asks
+  - Uploaded 7 run artifacts as deck assets (workflow DAG, both confusion matrices, filtered
+    scene 00, both whole-scene inference maps, prediction samples)
+  - Enabled the Codex stop-time review gate for this workspace
+  - Cross-checked the README DAG figure against the real planned DAG on `pegasus`
+    (`pegasus-graphviz` over run0004's `workflow.yml`, 9,054 nodes): the figure was missing
+    `compute_cloud_fraction`, `evaluate_stratified`, `infer_unet` and `resize_image`, all
+    default-on. Rewrote `generate_workflow_diagram.py` to add them (plus per-branch output
+    notes, and a caption in place of the floating ellipsis) and regenerated `images/workflow.png`
+  - Verified figure colours against the paper: predictions/inference use pure red/blue/green
+    against the paper's Fig 14 crimson/navy/yellow-green — same legend, slightly more
+    saturated; confusion matrices use the same Blues colormap with percentages
+  - Rebuilt all deck slides with a 32px (16pt) minimum type size, splitting the six-question
+    slide into two so nothing had to shrink; swapped slide 7 to the ≥10%-cloud stratified
+    confusion matrices, which are the ones its 24.05-vs-4.45 callout is drawn from
+- **Outcome**: A meeting deck that leads with the numbers but subordinates every Δ to the
+  self-consistent-labeling caveat, and ends on six concrete questions — the two that decide
+  whether our 99.84% and the paper's 98.97% measure the same thing, and the request for the
+  manually-labeled masks that unblocks both U-Net-Man and the SSIM claim.
+- **Models used**: Opus 5 (claude-opus-5, 1M context)
+- **Files created**: 17 deck files in the session scratchpad (published to the Artifact, not
+  committed to the repo)
+- **Files modified**: 4 (cc-usage-log.md, generate_workflow_diagram.py, images/workflow.png,
+  README.md)
+- **Correction found while rewriting the README**: the diagram (old *and* new) drew the
+  filtered branch as filter -> split -> color_segment -> image_merge -> split_masks. The real
+  DAG has no merge/re-split there — `color_segment` runs on each already-256x256 filtered tile
+  and emits the branch's label tiles directly. It also drew `split_images` as fed by
+  `image_split` when it is fed by the scene. Both fixed in
+  `generate_workflow_diagram.py`, the PNG regenerated, and the deck's slide 3 re-pointed at it.
+- **README**: Pipeline Overview rewritten — three stages with the orig/filtered split called
+  out, `filter_image`, `compute_cloud_fraction`, `evaluate_stratified` and `infer_unet` added
+  to the job list (they were missing entirely), and the ASCII diagram redrawn to match the
+  real DAG.
+- **Caught by the Codex stop-time review gate**: the first README rewrite claimed
+  `--no-auto-label` disables all of Stage 1. It does not — the only guard is
+  `workflow_generator.py:436`, so `image_split`, `color_segment`, `image_merge` and
+  `compute_cloud_fraction` always run, and the flag removes only the tile bridge (steps 4-8,
+  including the whole filtered branch). Corrected, and a fabricated `--stage1-only` flag
+  removed in the same pass. Good catch by the gate.
+- **Tool calls / token counts / cost**: not exactly tracked by the harness this session; not
+  estimated here rather than reported inaccurately
+---
