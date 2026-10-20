@@ -226,7 +226,15 @@ def main():
                         help="Preprocessing metadata JSON (overrides --n-classes)")
     parser.add_argument("--mode", choices=["single-gpu", "mirrored", "horovod"],
                         default="single-gpu", help="Training mode")
+    parser.add_argument("--train-seed", type=int, default=None,
+                        help="Seed weight initialisation, dropout and shuffling "
+                             "(tf.keras.utils.set_random_seed). Default: unseeded, as the "
+                             "reference notebook. GPU kernels can still add small differences")
     args = parser.parse_args()
+
+    if args.train_seed is not None:
+        tf.keras.utils.set_random_seed(args.train_seed)
+        logger.info(f"Training seed: {args.train_seed}")
 
     logger.info(f"Training mode: {args.mode}")
     logger.info(f"Epochs: {args.epochs}, Batch size: {args.batch_size}")
@@ -288,6 +296,7 @@ def main():
         hist["samples_per_second"] = epoch_timer.samples_per_sec
         hist["training_meta"] = {
             "mode": args.mode,
+            "train_seed": args.train_seed,
             "replicas": replicas,
             "batch_size": args.batch_size,
             "samples_per_epoch": epoch_timer.samples_per_epoch,

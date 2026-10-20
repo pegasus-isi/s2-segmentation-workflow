@@ -608,7 +608,30 @@ class S2SegmentationWorkflow:
             for mask_path in sorted(glob.glob(os.path.join(args.train_masks_dir, "*.png"))):
                 lfn = f"train_mask_{os.path.basename(mask_path)}"
                 train_mask_files.append(File(lfn))
-            branches = [("", train_img_files, train_mask_files)]
+            if args.filter_presplit_tiles:
+                # Second branch on the same tiles: each image tile through
+                # only_shadow_cloud_removal, scored against the SAME supplied
+                # masks, so neither condition uses labels we generated.
+                # Label-cluster in chunks so the filter tasks spread over the
+                # pool instead of running serially as one clustered job.
+                filt_img_files = []
+                for k, it in enumerate(train_img_files):
+                    ft = File(it.lfn.replace("train_img_", "train_imgf_", 1))
+                    base = os.path.splitext(it.lfn)[0]
+                    self.wf.add_jobs(
+                        Job("filter_image", _id=f"filter_tile_{base}",
+                            node_label=f"filter_tile_{base}")
+                        .add_args("--input", it, "--output", ft,
+                                  "--kernel-size", str(args.filter_kernel_size))
+                        .add_inputs(it)
+                        .add_outputs(ft, stage_out=False, register_replica=False)
+                        .add_pegasus_profiles(label=f"presplit_filter_{k // 500}")
+                    )
+                    filt_img_files.append(ft)
+                branches = [("orig", train_img_files, train_mask_files),
+                            ("filtered", filt_img_files, train_mask_files)]
+            else:
+                branches = [("", train_img_files, train_mask_files)]
 
         if not any(imgs and masks for _, imgs, masks in branches):
             logger.warning("No training images or masks found, skipping Stage 2")
@@ -706,6 +729,7 @@ class S2SegmentationWorkflow:
                 "--epochs", str(args.epochs),
                 "--batch-size", str(args.batch_size),
                 "--mode", args.training_mode,
+                *(["--train-seed", str(args.train_seed)] if args.train_seed is not None else []),
             )
             .add_inputs(x_train_file, y_train_file, model_py_file, metadata_file)
             .add_outputs(model_file, stage_out=True, register_replica=False)
@@ -940,6 +964,12 @@ Examples:
                              "consistent (reproduces the paper's ~99%%). 'raw' "
                              "reuses the raw-scene labels (filtered input vs "
                              "raw-derived target — the honest cross-comparison).")
+    parser.add_argument("--filter-presplit-tiles", action="store_true",
+                        help="With --no-auto-label: also train a filtered branch "
+                             "by running each --train-images-dir tile through the "
+                             "thin-cloud/shadow filter (tile scale, kernel 19 unless "
+                             "--filter-kernel-size is given) and scoring it against "
+                             "the same --train-masks-dir masks.")
     parser.add_argument("--train-images-dir", type=str, default=None,
                         help="Directory of 256x256 grayscale training images")
     parser.add_argument("--train-masks-dir", type=str, default=None,
@@ -989,6 +1019,9 @@ Examples:
     parser.add_argument("--n-classes", type=int, default=3, help="Segmentation classes")
     parser.add_argument("--test-size", type=float, default=0.20, help="Test split ratio")
     parser.add_argument("--random-state", type=int, default=0, help="Random seed")
+    parser.add_argument("--train-seed", type=int, default=None,
+                        help="Seed U-Net weight initialisation, dropout and shuffling "
+                             "(default: unseeded, as the reference notebook)")
 
     args = parser.parse_args()
 
@@ -999,7 +1032,9 @@ Examples:
 
     # Resolve filter kernel default based on scale.
     if args.filter_kernel_size is None:
-        args.filter_kernel_size = 155 if args.filter_scale == "scene" else 19
+        tile_filter = args.filter_scale == "tile" or (
+            args.filter_presplit_tiles and not args.auto_label)
+        args.filter_kernel_size = 19 if tile_filter else 155
     if args.filter_kernel_size < 3 or args.filter_kernel_size % 2 == 0:
         logger.error(
             f"--filter-kernel-size must be odd and >= 3 "
